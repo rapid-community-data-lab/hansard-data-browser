@@ -1,0 +1,28 @@
+[project]
+name = "oz-hansard-data-browser"
+description = "A notebook based environment for querying the proceedings of Australian Federal Parliament"
+readme = "README.md"
+requires-python = ">=3.14.0"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE.txt"]
+authors = [
+  {name = "Sam Hames"},
+]
+classifiers=[
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+]
+dependencies = [
+  "duckdb",
+  "jupytext",
+  "jupyterlab",
+  "ipywidgets"
+]
+version="0.0.1.dev1"
+
+[project.urls]
+Repository = "https://github.com/rapid-community-data-lab/hansard-data-browser"
+
+
+[project.optional-dependencies]
+dev = ["pip-tools"]

@@ -58,7 +58,9 @@ class SearchFilterSpec:
 
         # If there's no active queries choose randomly.
         if not queries:
-            queries.append("SELECT para_id from 'data/paragraph.parquet' sample 100")
+            queries.append(
+                "SELECT para_id from 'data/paragraph.parquet' using sample 100"
+            )
 
         return "\nINTERSECT\n".join(queries), params
 

@@ -25,4 +25,6 @@
 # %%
 from ui import UI
 
-UI()
+interface = UI()
+
+# %%

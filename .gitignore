@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Don't add the data files to the git repo
+notebooks/data
+*.parquet

@@ -93,6 +93,7 @@ class UI:
         self.conn = duckdb.connect()
 
         self.conn.execute("CREATE temporary table matching(para_id Int64)").fetchall()
+        self.conn.execute("PRAGMA disable_progress_bar")
 
         # Container for the final output
         self.display_ui = widgets.VBox(
@@ -116,8 +117,18 @@ class UI:
 
         self.search_bar = filters.text
 
-    def display_transcripts(self) -> None:
-        """Display the currently active set of transcripts."""
+    def matching_transcript_rows(self):
+        """Retrieve the matching rows of the last run query."""
+        return self.conn.execute("""
+            SELECT *
+            from 'data/paragraph.parquet'
+            inner join matching using(para_id)
+            inner join 'data/session.parquet' using(session_id)
+            """)
+
+    def render_transcript_rows(self):
+        """Render to nice HTML the rows of the transcript."""
+        return list(self.matching_transcript_rows().fetchall())
 
     def run_search(self, button: widgets.Button) -> None:
         """Run the search with the currently set filters."""
@@ -133,16 +144,14 @@ class UI:
             query, params = filters.create_query()
 
             self.conn.execute("DROP table matching")
-            self.conn.execute(
-                "CREATE temporary table matching(para_id Int64)"
-            ).fetchall()
+            self.conn.execute("CREATE temporary table matching(para_id Int64)")
 
             with self.display_transcripts:
                 self.conn.execute("INSERT into matching\n" + query, params)
-                print(self.conn.sql("SELECT * from matching").show())
+                display(filters)
+                print(self.render_transcript_rows())
 
         except Exception:
-            self.display_transcripts.clear_output()
             with self.display_transcripts:
                 print(
                     "Whoops, something went wrong - try again with different parameters"

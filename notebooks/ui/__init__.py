@@ -25,6 +25,7 @@ not anything they said before or after.
 
 import dataclasses as dc
 
+from tinyhtml import h, raw
 import duckdb
 import ipywidgets as widgets
 
@@ -36,9 +37,19 @@ from 'data/paragraph.parquet'
 where ? in lower(text)
 """
 
+DATE_QUERY = """
+SELECT paragraph.para_id
+from 'data/paragraph.parquet'
+inner join 'data/session.parquet' using(session_id)
+where session.date between make_date(?, 1, 1) and make_date(?, 12, 31)
+"""
+
 
 @dc.dataclass
 class SearchFilterSpec:
+
+    start_year: int = 1901
+    end_year: int = 3000
     text: str = ""
 
     def create_query(self) -> list[str, list[Any]]:
@@ -56,13 +67,41 @@ class SearchFilterSpec:
             queries.append(TEXT_QUERY)
             params.append(self.text)
 
-        # If there's no active queries choose randomly.
-        if not queries:
+        queries.append(DATE_QUERY)
+        params.extend((self.start_year, self.end_year))
+
+        # If there's only mandatory filters active...
+        if len(queries) == 1:
             queries.append(
                 "SELECT para_id from 'data/paragraph.parquet' using sample 100"
             )
 
         return "\nINTERSECT\n".join(queries), params
+
+    def _repr_html_(self):
+        return h("dl")(
+            (h("dt")(key), h("dd")(val)) for key, val in dc.asdict(self).items()
+        ).render()
+
+
+@dc.dataclass
+class SearchResults:
+
+    rows: iterable
+
+    def render_row(self, row):
+        """Render a single row nice and compact."""
+        return h("div")(
+            h("div")(row[0]),
+            h("div")(h("span")(h("em")(row[2])), " ", h("span")(row[1])),
+        )
+
+    def _repr_html_(self):
+        """Render as HTML in the notebook."""
+
+        return h("ol")(
+            h("li")(self.render_row(row)) for row in self.rows.fetchall()
+        ).render()
 
 
 class UI:
@@ -71,13 +110,32 @@ class UI:
 
         button_layout = widgets.Layout(width="90%", height="2lh")
         wide_layout = widgets.Layout(width="90%")
-        style = {"description_width": "40%"}
+        style = {"description_width": "25%"}
 
-        self.search_bar = widgets.Text(
+        self.search_text = widgets.Text(
             value="",
             placeholder="",
             description="Search text:",
-            disabled=False,
+            layout=wide_layout,
+            style=style,
+        )
+
+        self.start_year = widgets.BoundedIntText(
+            value=1996,
+            min=1996,
+            max=2026,
+            step=1,
+            description="Start year:",
+            layout=wide_layout,
+            style=style,
+        )
+
+        self.end_year = widgets.BoundedIntText(
+            value=2026,
+            min=1996,
+            max=2026,
+            step=1,
+            description="End year:",
             layout=wide_layout,
             style=style,
         )
@@ -97,7 +155,14 @@ class UI:
 
         # Container for the final output
         self.display_ui = widgets.VBox(
-            [self.search_bar, self.run_button, self.display_transcripts]
+            [
+                self.search_text,
+                widgets.HBox(
+                    [self.start_year, self.end_year], layout=widgets.Layout(width="90%")
+                ),
+                self.run_button,
+                self.display_transcripts,
+            ]
         )
 
         display(self.display_ui)
@@ -105,7 +170,11 @@ class UI:
     def get_search_filters(self) -> SearchFilterSpec:
         """Get the current state of the search filters."""
 
-        return SearchFilterSpec(text=self.search_bar.value)
+        return SearchFilterSpec(
+            text=self.search_text.value,
+            start_year=self.start_year.value,
+            end_year=self.end_year.value,
+        )
 
     def set_search_filters(self, filters: SearchFilterSpec) -> None:
         """
@@ -115,20 +184,25 @@ class UI:
 
         """
 
-        self.search_bar = filters.text
+        self.search_text.value = filters.text
+        self.start_year.value = filters.start_year
+        self.end_year.value = filters.end_year
 
     def matching_transcript_rows(self):
         """Retrieve the matching rows of the last run query."""
         return self.conn.execute("""
-            SELECT *
+            SELECT
+                session.date,
+                -- This is necessary to avoid mathjax rendering in the jupyter cell...
+                replace(paragraph.text, '$', '\\$') as text,
+                speaker.display_name
             from 'data/paragraph.parquet'
             inner join matching using(para_id)
             inner join 'data/session.parquet' using(session_id)
+            inner join 'data/speaker.parquet' on paragraph.speaker_id = speaker.phid
+            order by session.date
+            limit 1000
             """)
-
-    def render_transcript_rows(self):
-        """Render to nice HTML the rows of the transcript."""
-        return list(self.matching_transcript_rows().fetchall())
 
     def run_search(self, button: widgets.Button) -> None:
         """Run the search with the currently set filters."""
@@ -149,10 +223,11 @@ class UI:
             with self.display_transcripts:
                 self.conn.execute("INSERT into matching\n" + query, params)
                 display(filters)
-                print(self.render_transcript_rows())
+                display(SearchResults(self.matching_transcript_rows()))
 
-        except Exception:
+        except Exception as e:
             with self.display_transcripts:
                 print(
                     "Whoops, something went wrong - try again with different parameters"
                 )
+                print(e)

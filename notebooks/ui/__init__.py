@@ -39,6 +39,15 @@ class SearchFilterSpec:
     parties: list[str] = dc.field(default_factory=list)
     houses: list[str] = dc.field(default_factory=list)
 
+    def __post_init__(self):
+
+        # If all is selected that's the only one that matters.
+        if "All" in self.parties:
+            self.parties = ["All"]
+
+        if "All" in self.houses:
+            self.houses = ["All"]
+
     def create_query(self) -> list[str, list[Any]]:
         """
         Create the SQL query to generate a table of matching paragraph ids.
@@ -66,11 +75,6 @@ class SearchFilterSpec:
         if self.text:
             clauses.append("? in lower(text)")
             params.append(self.text)
-
-        # If all is selected that's the only one that matters.
-        for item in (self.parties, self.houses):
-            if "All" in item:
-                item = ["All"]
 
         if self.parties and "All" not in self.parties:
             needs_speaker = True

@@ -29,23 +29,6 @@ from tinyhtml import h, raw
 import duckdb
 import ipywidgets as widgets
 
-# The text query takes into account the filters already run, and runs last, as it's
-# otherwise the most time intensive part of the process.
-TEXT_QUERY = """
-SELECT para_id
-from 'data/paragraph.parquet'
-where ? in lower(text)
-"""
-
-# Except for text search above, there's one simple query per filter, always returning a
-# set of identifiers to be intersected.
-DATE_QUERY = """
-SELECT paragraph.para_id
-from 'data/paragraph.parquet'
-inner join 'data/session.parquet' using(session_id)
-where session.date between make_date(?, 1, 1) and make_date(?, 12, 31)
-"""
-
 
 @dc.dataclass
 class SearchFilterSpec:
@@ -53,6 +36,8 @@ class SearchFilterSpec:
     start_year: int = 1901
     end_year: int = 3000
     text: str = ""
+    parties: list[str] = dc.field(default_factory=list)
+    houses: list[str] = dc.field(default_factory=list)
 
     def create_query(self) -> list[str, list[Any]]:
         """
@@ -62,8 +47,10 @@ class SearchFilterSpec:
 
         """
 
+        joins = []
         clauses = []
         params = []
+        needs_speaker = False
 
         base_query = """
             INSERT into matching
@@ -80,19 +67,47 @@ class SearchFilterSpec:
             clauses.append("? in lower(text)")
             params.append(self.text)
 
+        # If all is selected that's the only one that matters.
+        for item in (self.parties, self.houses):
+            if "All" in item:
+                item = ["All"]
+
+        if self.parties and "All" not in self.parties:
+            needs_speaker = True
+            clauses.append("speaker_details.party in ?")
+            params.append(self.parties)
+
+        if self.houses and "All" not in self.houses:
+            clauses.append("session.chamber in ?")
+            params.append(self.houses)
+
+        if needs_speaker:
+            joins.append(
+                "inner join 'data/speaker_details.parquet' using(speaker_detail_id)"
+            )
+
         clauses.append(
             "session.date between make_date(?, 1, 1) and make_date(?, 12, 31)"
         )
         params.extend((self.start_year, self.end_year))
 
-        where = "and\n".join(clauses)
-        query = base_query.format("", where)
+        join = "\n".join(joins)
+        where = " and\n".join(clauses)
+        query = base_query.format(join, where)
 
         return query, params
 
+    def _repr_list(self, val):
+
+        if isinstance(val, tuple):
+            return h("ul")([h("li")(v) for v in val])
+        else:
+            return val
+
     def _repr_html_(self):
         return h("dl")(
-            (h("dt")(key), h("dd")(val)) for key, val in dc.asdict(self).items()
+            (h("dt")(key), h("dd")(self._repr_list(val)))
+            for key, val in dc.asdict(self).items()
         ).render()
 
 
@@ -104,26 +119,33 @@ class SearchResults:
     def render_row(self, row):
         """Render a single row nice and compact."""
         return h("div")(
-            h("div")(h("a", href=row[0])(row[1], " ", row[2])),
-            h("div")(h("span")(h("em")(row[3])), " ", h("span")(row[4])),
+            h("h3")(h("a", href=row[0])(row[1], " ", row[2])),
+            h("p")(
+                h("span")(h("em")(row[4], ", ", row[3], ":")), " ", h("span")(row[5])
+            ),
         )
 
     def _repr_html_(self):
         """Render as HTML in the notebook."""
 
-        return h("ol")(
-            h("li")(self.render_row(row)) for row in self.rows.fetchall()
-        ).render()
+        return h("div")(self.render_row(row) for row in self.rows.fetchall()).render()
 
 
 class UI:
 
     def __init__(self) -> None:
 
+        # Initialise db
+        self.conn = duckdb.connect()
+
+        self.conn.execute("CREATE temporary table matching(para_id Int64)").fetchall()
+        self.conn.execute("PRAGMA disable_progress_bar")
         self.current_offset = 0
 
+        # setup all the UI elements.
         button_layout = widgets.Layout(width="90%", height="2lh")
         wide_layout = widgets.Layout(width="90%")
+        selector_layout = widgets.Layout(width="95%")
         style = {"description_width": "25%"}
 
         self.search_text = widgets.Text(
@@ -132,6 +154,36 @@ class UI:
             description="Search text:",
             layout=wide_layout,
             style=style,
+        )
+
+        party_options = ["All"]
+        party_options.extend(
+            row[0]
+            for row in self.conn.execute(
+                "SELECT distinct party from 'data/speaker_details.parquet'"
+            ).fetchall()
+        )
+        self.parties = widgets.SelectMultiple(
+            value=["All"],
+            options=sorted(party_options),
+            description="Parties",
+            style=style,
+            layout=selector_layout,
+        )
+
+        house_options = ["All"]
+        house_options.extend(
+            row[0]
+            for row in self.conn.execute(
+                "SELECT distinct chamber from 'data/session.parquet'"
+            ).fetchall()
+        )
+        self.houses = widgets.SelectMultiple(
+            value=["All"],
+            options=sorted(house_options),
+            description="House:",
+            style=style,
+            layout=selector_layout,
         )
 
         self.start_year = widgets.BoundedIntText(
@@ -174,15 +226,13 @@ class UI:
 
         self.display_transcripts = widgets.Output()
 
-        self.conn = duckdb.connect()
-
-        self.conn.execute("CREATE temporary table matching(para_id Int64)").fetchall()
-        self.conn.execute("PRAGMA disable_progress_bar")
-
         # Container for the final output
         self.display_ui = widgets.VBox(
             [
                 self.search_text,
+                widgets.HBox(
+                    [self.parties, self.houses], layout=widgets.Layout(width="90%")
+                ),
                 widgets.HBox(
                     [self.start_year, self.end_year], layout=widgets.Layout(width="90%")
                 ),
@@ -200,6 +250,8 @@ class UI:
             text=self.search_text.value,
             start_year=self.start_year.value,
             end_year=self.end_year.value,
+            parties=self.parties.value,
+            houses=self.houses.value,
         )
 
     def set_search_filters(self, filters: SearchFilterSpec) -> None:
@@ -222,13 +274,14 @@ class UI:
                 session.url,
                 session.chamber,
                 session.date,
-                speaker.display_name,
+                speaker_details.given_name,
+                speaker_details.family_name,
                 -- This is necessary to avoid mathjax rendering in the jupyter cell...
                 replace(paragraph.text, '$', '\\$') as text
             from 'data/paragraph.parquet'
             inner join matching using(para_id)
             inner join 'data/session.parquet' using(session_id)
-            inner join 'data/speaker.parquet' on paragraph.speaker_id = speaker.phid
+            inner join 'data/speaker_details.parquet' using(speaker_detail_id)
             order by session.date
             limit ?
             offset ?

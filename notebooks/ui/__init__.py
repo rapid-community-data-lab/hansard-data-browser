@@ -29,14 +29,16 @@ from tinyhtml import h, raw
 import duckdb
 import ipywidgets as widgets
 
-# There's one simple query per filter, always returning a set of identifiers to be
-# intersected
+# The text query takes into account the filters already run, and runs last, as it's
+# otherwise the most time intensive part of the process.
 TEXT_QUERY = """
 SELECT para_id
 from 'data/paragraph.parquet'
 where ? in lower(text)
 """
 
+# Except for text search above, there's one simple query per filter, always returning a
+# set of identifiers to be intersected.
 DATE_QUERY = """
 SELECT paragraph.para_id
 from 'data/paragraph.parquet'
@@ -60,23 +62,33 @@ class SearchFilterSpec:
 
         """
 
-        queries = []
+        clauses = []
         params = []
 
+        base_query = """
+            INSERT into matching
+                SELECT
+                    paragraph.para_id
+                from 'data/paragraph.parquet'
+                inner join 'data/session.parquet' using (session_id)
+                {}
+                where {}
+
+        """
+
         if self.text:
-            queries.append(TEXT_QUERY)
+            clauses.append("? in lower(text)")
             params.append(self.text)
 
-        queries.append(DATE_QUERY)
+        clauses.append(
+            "session.date between make_date(?, 1, 1) and make_date(?, 12, 31)"
+        )
         params.extend((self.start_year, self.end_year))
 
-        # If there's only mandatory filters active...
-        if len(queries) == 1:
-            queries.append(
-                "SELECT para_id from 'data/paragraph.parquet' using sample 100"
-            )
+        where = "and\n".join(clauses)
+        query = base_query.format("", where)
 
-        return "\nINTERSECT\n".join(queries), params
+        return query, params
 
     def _repr_html_(self):
         return h("dl")(
@@ -92,8 +104,8 @@ class SearchResults:
     def render_row(self, row):
         """Render a single row nice and compact."""
         return h("div")(
-            h("div")(row[0]),
-            h("div")(h("span")(h("em")(row[2])), " ", h("span")(row[1])),
+            h("div")(h("a", href=row[0])(row[1], " ", row[2])),
+            h("div")(h("span")(h("em")(row[3])), " ", h("span")(row[4])),
         )
 
     def _repr_html_(self):
@@ -107,6 +119,8 @@ class SearchResults:
 class UI:
 
     def __init__(self) -> None:
+
+        self.current_offset = 0
 
         button_layout = widgets.Layout(width="90%", height="2lh")
         wide_layout = widgets.Layout(width="90%")
@@ -145,6 +159,18 @@ class UI:
             layout=wide_layout,
         )
         self.run_button.on_click(self.run_search)
+
+        self.next_page_button = widgets.Button(
+            description="Next Page",
+        )
+        self.next_page_button.on_click(self.next_page)
+
+        self.prev_page_button = widgets.Button(
+            description="Prev Page",
+        )
+        self.prev_page_button.on_click(self.prev_page)
+
+        self.pagination = widgets.HBox([self.prev_page_button, self.next_page_button])
 
         self.display_transcripts = widgets.Output()
 
@@ -188,21 +214,48 @@ class UI:
         self.start_year.value = filters.start_year
         self.end_year.value = filters.end_year
 
-    def matching_transcript_rows(self):
+    def matching_transcript_rows(self, n_results=50, offset=0):
         """Retrieve the matching rows of the last run query."""
-        return self.conn.execute("""
+        return self.conn.execute(
+            """
             SELECT
+                session.url,
+                session.chamber,
                 session.date,
+                speaker.display_name,
                 -- This is necessary to avoid mathjax rendering in the jupyter cell...
-                replace(paragraph.text, '$', '\\$') as text,
-                speaker.display_name
+                replace(paragraph.text, '$', '\\$') as text
             from 'data/paragraph.parquet'
             inner join matching using(para_id)
             inner join 'data/session.parquet' using(session_id)
             inner join 'data/speaker.parquet' on paragraph.speaker_id = speaker.phid
             order by session.date
-            limit 1000
-            """)
+            limit ?
+            offset ?
+            """,
+            [n_results, offset],
+        )
+
+    def current_results_page(self):
+        """Display the current page of results."""
+
+        self.display_transcripts.clear_output()
+
+        with self.display_transcripts:
+            display(self.get_search_filters())
+            display(self.pagination)
+            display(
+                SearchResults(self.matching_transcript_rows(offset=self.current_offset))
+            )
+            display(self.pagination)
+
+    def next_page(self, button):
+        self.current_offset += 50
+        self.current_results_page()
+
+    def prev_page(self, button):
+        self.current_offset = max(0, self.current_offset - 50)
+        self.current_results_page
 
     def run_search(self, button: widgets.Button) -> None:
         """Run the search with the currently set filters."""
@@ -221,13 +274,14 @@ class UI:
             self.conn.execute("CREATE temporary table matching(para_id Int64)")
 
             with self.display_transcripts:
-                self.conn.execute("INSERT into matching\n" + query, params)
                 display(filters)
-                display(SearchResults(self.matching_transcript_rows()))
+                self.conn.execute(query, params)
+                self.current_offset = 0
+                self.current_results_page()
 
         except Exception as e:
             with self.display_transcripts:
+                display(e)
                 print(
                     "Whoops, something went wrong - try again with different parameters"
                 )
-                print(e)

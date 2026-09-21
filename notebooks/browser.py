@@ -16,14 +16,16 @@
 # %% [markdown]
 # # Proceedings of Australian Federal Parliament Analytical Browser
 #
-# TODO: write explanatory text and usage notes.
+# This is a small search and export interface for the analytical dataset produced from
+# the Proceedings of Australian Federal Parliament by the [RAPID-CDL project]
+# (https://rapid-cdl.edu.au). It is designed to let you quickly explore the proceedings
+# by content, then export a specific extract for further analysis.
 #
-# Explanatory note and where to get the data.
-#
-# Version, citation and licensing information.
-#
-# About the RAPID project
-#
+# Run this notebook by hitting the ▶▶ ("restart kernel and run all cells") button in the
+# menu above - you'll be asked if you want to restart this notebook - answer 'yes' and
+# the notebook will be run. Follow the prompts to set your search parameters, read and
+# adjust your query based on the results, then hit export to create a spreadsheet of
+# all the matching items.
 #
 
 # %%

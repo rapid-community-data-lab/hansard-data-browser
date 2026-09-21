@@ -41,6 +41,8 @@ class SearchFilterSpec:
     case_sensitive: bool = False
     parties: list[str] = dc.field(default_factory=list)
     houses: list[str] = dc.field(default_factory=list)
+    matching_paragraphs: int = 0
+    matching_speeches: int = 0
 
     def __post_init__(self):
 
@@ -138,9 +140,34 @@ class SearchFilterSpec:
             return val
 
     def _repr_html_(self):
+
+        key_values = []
+
+        key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
+
+        if self.text:
+            key_values.append(("Search", self.text))
+            key_values.append(("Case Sensitive", self.case_sensitive))
+            key_values.append(("Match Whole Words", self.tokenised))
+
+        if self.parties and "All" not in self.parties:
+            key_values.append(
+                ("Parties", h("ul")(h("li")(party) for party in self.parties))
+            )
+
+        if self.houses and "All" not in self.houses:
+            key_values.append(
+                ("Chamber", h("ul")(h("li")(house) for house in self.houses))
+            )
+
+        if self.matching_paragraphs:
+            key_values.append(("Matching Paragraphs", self.matching_paragraphs))
+
+        if self.matching_speeches:
+            key_values.append(("Matching Speeches", self.matching_speeches))
+
         return h("dl")(
-            (h("dt")(key), h("dd")(self._repr_list(val)))
-            for key, val in dc.asdict(self).items()
+            (h("dt")(key), h("dd")(value)) for key, value in key_values
         ).render()
 
 
@@ -182,6 +209,8 @@ class UI:
         self.conn.execute("CREATE temporary table matching(para_id Int64)").fetchall()
         self.conn.execute("PRAGMA disable_progress_bar")
         self.current_offset = 0
+
+        self.result_counts = (0, 0)
 
         # setup all the UI elements.
         button_layout = widgets.Layout(width="90%", height="2lh")
@@ -306,6 +335,8 @@ class UI:
             houses=self.houses.value,
             tokenised=self.tokenised.value,
             case_sensitive=self.case_sensitive.value,
+            matching_paragraphs=self.result_counts[0],
+            matching_speeches=self.result_counts[1],
         )
 
     def set_search_filters(self, filters: SearchFilterSpec) -> None:
@@ -352,9 +383,12 @@ class UI:
         self.display_transcripts.clear_output()
 
         filters = self.get_search_filters()
+
         with self.display_transcripts:
+            display(h("h2")("Search Overview"))
             display(filters)
             display(self.pagination)
+            display(h("h2")("Search Results"))
             display(
                 SearchResults(
                     self.matching_transcript_rows(offset=self.current_offset),
@@ -387,9 +421,18 @@ class UI:
             self.conn.execute("DROP table matching")
             self.conn.execute("CREATE temporary table matching(para_id Int64)")
 
+            self.result_counts = (0, 0)
+
             with self.display_transcripts:
-                display(filters)
                 self.conn.execute(query, params)
+                self.result_counts = self.conn.execute("""
+                    SELECT
+                        count(*),
+                        count(distinct (session_id, procedural_unit_number))
+                    from matching
+                    inner join 'data/paragraph.parquet' using(para_id)
+                    """).fetchall()[0]
+                display(self.get_search_filters())
                 self.current_offset = 0
                 self.current_results_page()
 

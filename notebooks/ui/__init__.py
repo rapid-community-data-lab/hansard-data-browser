@@ -156,14 +156,14 @@ class SearchResults:
 
     def render_row(self, row):
         """Render a single row nice and compact."""
-        text = row[5]
+        text = row[6]
 
         if self.highlight_re is not None:
             text = raw(self.highlight_re.sub(self._replace_match, text))
 
         return h("div")(
-            h("h3")(h("a", href=row[0])(row[1], " ", row[2])),
-            h("p")(h("span")(h("em")(row[4], ", ", row[3], ":")), " ", h("span")(text)),
+            h("h3")(h("a", href=row[0])(row[1], ", ", row[2], ", ", row[3])),
+            h("p")(h("span")(h("em")(row[5], ", ", row[4], ":")), " ", h("span")(text)),
         )
 
     def _repr_html_(self):
@@ -328,13 +328,16 @@ class UI:
                 session.url,
                 session.chamber,
                 session.date,
+                debate_title.title,
                 speaker_detail.given_name,
                 speaker_detail.family_name,
                 -- This is necessary to avoid mathjax rendering in the jupyter cell...
                 replace(paragraph.text, '$', '\\$') as text
             from 'data/paragraph.parquet'
             inner join matching using(para_id)
-            inner join 'data/session.parquet' using(session_id)
+            inner join 'data/debate_title.parquet' using(debate_id)
+            inner join 'data/session.parquet' on
+                paragraph.session_id = session.session_id
             inner join 'data/speaker_detail.parquet' using(speaker_detail_id)
             order by session.date
             limit ?

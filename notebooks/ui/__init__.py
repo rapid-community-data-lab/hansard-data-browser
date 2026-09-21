@@ -339,7 +339,7 @@ class UI:
             inner join 'data/session.parquet' on
                 paragraph.session_id = session.session_id
             inner join 'data/speaker_detail.parquet' using(speaker_detail_id)
-            order by session.date
+            order by session.date, session.date, para_id
             limit ?
             offset ?
             """,

@@ -188,9 +188,13 @@ class SearchResults:
         if self.highlight_re is not None:
             text = raw(self.highlight_re.sub(self._replace_match, text))
 
+        speaker_detail = None
+        if row[5] or row[4]:
+            speaker_detail = h("em")(row[5], ", ", row[4], ":")
+
         return h("div")(
             h("h3")(h("a", href=row[0])(row[1], ", ", row[2], ", ", row[3])),
-            h("p")(h("span")(h("em")(row[5], ", ", row[4], ":")), " ", h("span")(text)),
+            h("p")(h("span")(speaker_detail), " ", h("span")(text)),
         )
 
     def _repr_html_(self):
@@ -369,7 +373,8 @@ class UI:
             inner join 'data/debate_title.parquet' using(debate_id)
             inner join 'data/session.parquet' on
                 paragraph.session_id = session.session_id
-            inner join 'data/speaker_detail.parquet' using(speaker_detail_id)
+            -- left join because the speaker_id can be null or not mapped to anything.
+            left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
             order by session.date, session.date, para_id
             limit ?
             offset ?

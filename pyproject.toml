@@ -17,7 +17,8 @@ dependencies = [
   "jupytext",
   "jupyterlab",
   "ipywidgets",
-  "tinyhtml"
+  "tinyhtml",
+  "openpyxl"
 ]
 version="0.0.1.dev1"
 

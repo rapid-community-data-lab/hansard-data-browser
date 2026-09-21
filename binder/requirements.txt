@@ -47,6 +47,8 @@ defusedxml==0.7.1
     # via nbconvert
 duckdb==1.5.5
     # via oz-hansard-data-browser (pyproject.toml)
+et-xmlfile==2.0.0
+    # via openpyxl
 executing==2.2.1
     # via stack-data
 fastjsonschema==2.22.2
@@ -169,6 +171,8 @@ nest-asyncio2==1.7.2
     # via ipykernel
 notebook-shim==0.2.4
     # via jupyterlab
+openpyxl==3.1.5
+    # via oz-hansard-data-browser (pyproject.toml)
 packaging==26.3
     # via
     #   ipykernel

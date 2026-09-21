@@ -24,6 +24,7 @@ not anything they said before or after.
 """
 
 import dataclasses as dc
+import re
 
 from tinyhtml import h, raw
 import duckdb
@@ -36,6 +37,8 @@ class SearchFilterSpec:
     start_year: int = 1901
     end_year: int = 3000
     text: str = ""
+    tokenised: bool = True
+    case_sensitive: bool = False
     parties: list[str] = dc.field(default_factory=list)
     houses: list[str] = dc.field(default_factory=list)
 
@@ -43,10 +46,10 @@ class SearchFilterSpec:
 
         # If all is selected that's the only one that matters.
         if "All" in self.parties:
-            self.parties = ["All"]
+            self.parties = ("All",)
 
         if "All" in self.houses:
-            self.houses = ["All"]
+            self.houses = ("All",)
 
     def create_query(self) -> list[str, list[Any]]:
         """
@@ -72,10 +75,6 @@ class SearchFilterSpec:
 
         """
 
-        if self.text:
-            clauses.append("? in lower(text)")
-            params.append(self.text)
-
         if self.parties and "All" not in self.parties:
             needs_speaker = True
             clauses.append("speaker_details.party in ?")
@@ -95,11 +94,41 @@ class SearchFilterSpec:
         )
         params.extend((self.start_year, self.end_year))
 
+        if self.text:
+
+            options = "c" if self.case_sensitive else "i"
+
+            if self.tokenised:
+                search = "|".join(rf"\b{t}\b" for t in self.text.split())
+            else:
+                search = self.text
+
+            clauses.append("regexp_matches(text, ?, ?)")
+
+            params.extend((search, options))
+
         join = "\n".join(joins)
         where = " and\n".join(clauses)
         query = base_query.format(join, where)
 
         return query, params
+
+    def highlight_regex(self):
+        """
+        Return a regular expression that can be used to highlight search matches.
+
+        There may be some edges cases where the Python re module does not have the
+        same beahviour as the re2 module used in duckdb...
+
+        """
+        options = re.NOFLAG if self.case_sensitive else re.IGNORECASE
+
+        if self.tokenised:
+            search = "|".join(rf"\b{t}\b" for t in self.text.split())
+        else:
+            search = self.text
+
+        return re.compile(search, flags=options)
 
     def _repr_list(self, val):
 
@@ -119,14 +148,22 @@ class SearchFilterSpec:
 class SearchResults:
 
     rows: iterable
+    highlight_re: re.Pattern | None = None
+
+    def _replace_match(self, match):
+
+        return f"<mark>{match.group(0)}</mark>"
 
     def render_row(self, row):
         """Render a single row nice and compact."""
+        text = row[5]
+
+        if self.highlight_re is not None:
+            text = raw(self.highlight_re.sub(self._replace_match, text))
+
         return h("div")(
             h("h3")(h("a", href=row[0])(row[1], " ", row[2])),
-            h("p")(
-                h("span")(h("em")(row[4], ", ", row[3], ":")), " ", h("span")(row[5])
-            ),
+            h("p")(h("span")(h("em")(row[4], ", ", row[3], ":")), " ", h("span")(text)),
         )
 
     def _repr_html_(self):
@@ -158,6 +195,13 @@ class UI:
             description="Search text:",
             layout=wide_layout,
             style=style,
+        )
+
+        self.tokenised = widgets.Checkbox(
+            value=True, description="Search for whole words"
+        )
+        self.case_sensitive = widgets.Checkbox(
+            value=False, description="Case sensitive"
         )
 
         party_options = ["All"]
@@ -235,6 +279,10 @@ class UI:
             [
                 self.search_text,
                 widgets.HBox(
+                    [self.tokenised, self.case_sensitive],
+                    layout=widgets.Layout(width="90%"),
+                ),
+                widgets.HBox(
                     [self.parties, self.houses], layout=widgets.Layout(width="90%")
                 ),
                 widgets.HBox(
@@ -256,6 +304,8 @@ class UI:
             end_year=self.end_year.value,
             parties=self.parties.value,
             houses=self.houses.value,
+            tokenised=self.tokenised.value,
+            case_sensitive=self.case_sensitive.value,
         )
 
     def set_search_filters(self, filters: SearchFilterSpec) -> None:
@@ -298,11 +348,15 @@ class UI:
 
         self.display_transcripts.clear_output()
 
+        filters = self.get_search_filters()
         with self.display_transcripts:
-            display(self.get_search_filters())
+            display(filters)
             display(self.pagination)
             display(
-                SearchResults(self.matching_transcript_rows(offset=self.current_offset))
+                SearchResults(
+                    self.matching_transcript_rows(offset=self.current_offset),
+                    highlight_re=filters.highlight_regex(),
+                )
             )
             display(self.pagination)
 

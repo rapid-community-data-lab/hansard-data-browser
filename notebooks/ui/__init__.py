@@ -77,7 +77,7 @@ class SearchFilterSpec:
 
         if self.parties and "All" not in self.parties:
             needs_speaker = True
-            clauses.append("speaker_details.party in ?")
+            clauses.append("speaker_detail.party in ?")
             params.append(self.parties)
 
         if self.houses and "All" not in self.houses:
@@ -86,7 +86,7 @@ class SearchFilterSpec:
 
         if needs_speaker:
             joins.append(
-                "inner join 'data/speaker_details.parquet' using(speaker_detail_id)"
+                "inner join 'data/speaker_detail.parquet' using(speaker_detail_id)"
             )
 
         clauses.append(
@@ -208,7 +208,7 @@ class UI:
         party_options.extend(
             row[0]
             for row in self.conn.execute(
-                "SELECT distinct party from 'data/speaker_details.parquet'"
+                "SELECT distinct party from 'data/speaker_detail.parquet'"
             ).fetchall()
         )
         self.parties = widgets.SelectMultiple(
@@ -328,14 +328,14 @@ class UI:
                 session.url,
                 session.chamber,
                 session.date,
-                speaker_details.given_name,
-                speaker_details.family_name,
+                speaker_detail.given_name,
+                speaker_detail.family_name,
                 -- This is necessary to avoid mathjax rendering in the jupyter cell...
                 replace(paragraph.text, '$', '\\$') as text
             from 'data/paragraph.parquet'
             inner join matching using(para_id)
             inner join 'data/session.parquet' using(session_id)
-            inner join 'data/speaker_details.parquet' using(speaker_detail_id)
+            inner join 'data/speaker_detail.parquet' using(speaker_detail_id)
             order by session.date
             limit ?
             offset ?

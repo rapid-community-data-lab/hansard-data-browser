@@ -23,9 +23,13 @@ not anything they said before or after.
 
 """
 
+from pathlib import Path
 import dataclasses as dc
 import re
 
+from IPython.display import HTML
+from openpyxl import Workbook, styles
+from openpyxl.utils.cell import get_column_letter
 from tinyhtml import h, raw
 import duckdb
 import ipywidgets as widgets
@@ -98,22 +102,28 @@ class SearchFilterSpec:
 
         if self.text:
 
-            options = "c" if self.case_sensitive else "i"
-
-            if self.tokenised:
-                search = "|".join(rf"\b{t}\b" for t in self.text.split())
-            else:
-                search = self.text
+            regex_params = self.get_search_regex()
 
             clauses.append("regexp_matches(text, ?, ?)")
 
-            params.extend((search, options))
+            params.extend(regex_params)
 
         join = "\n".join(joins)
         where = " and\n".join(clauses)
         query = base_query.format(join, where)
 
         return query, params
+
+    def get_search_regex(self):
+        """Get the regular expression to be used as the text search."""
+        options = "c" if self.case_sensitive else "i"
+
+        if self.tokenised:
+            search = "|".join(rf"\b{t}\b" for t in self.text.split())
+        else:
+            search = self.text
+
+        return (search, options)
 
     def highlight_regex(self):
         """
@@ -293,17 +303,27 @@ class UI:
         )
         self.run_button.on_click(self.run_search)
 
+        self.export_button = widgets.Button(
+            description="Export Results",
+            layout=wide_layout,
+        )
+        self.export_button.on_click(self.export_search)
+
         self.next_page_button = widgets.Button(
             description="Next Page",
+            layout=wide_layout,
         )
         self.next_page_button.on_click(self.next_page)
 
         self.prev_page_button = widgets.Button(
             description="Prev Page",
+            layout=wide_layout,
         )
         self.prev_page_button.on_click(self.prev_page)
 
-        self.pagination = widgets.HBox([self.prev_page_button, self.next_page_button])
+        self.pagination = widgets.HBox(
+            [self.prev_page_button, self.next_page_button], layout=wide_layout
+        )
 
         self.display_transcripts = widgets.Output()
 
@@ -375,7 +395,7 @@ class UI:
                 paragraph.session_id = session.session_id
             -- left join because the speaker_id can be null or not mapped to anything.
             left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
-            order by session.date, session.date, para_id
+            order by session.date, session.chamber, para_id
             limit ?
             offset ?
             """,
@@ -392,6 +412,7 @@ class UI:
         with self.display_transcripts:
             display(h("h2")("Search Overview"))
             display(filters)
+            display(self.export_button)
             display(self.pagination)
             display(h("h2")("Search Results"))
             display(
@@ -447,3 +468,143 @@ class UI:
                 print(
                     "Whoops, something went wrong - try again with different parameters"
                 )
+
+    def export_search(self, button: widgets.Button) -> None:
+        """Export the current search results to a spreadsheet."""
+
+        self.display_transcripts.clear_output()
+
+        # TODO: progress bar
+        # TODO: check the output size and make sure it fits in excel limits
+        # TODO: provenance sheet indicating the query.
+
+        with self.display_transcripts:
+
+            filters = self.get_search_filters()
+
+            regex_params = filters.get_search_regex()
+
+            content_query = self.conn.execute(
+                """
+                WITH matching_units as (
+                    SELECT distinct
+                        session_id,
+                        paragraph.procedural_unit_number
+                    from 'data/paragraph.parquet'
+                    inner join matching using(para_id)
+                )
+                SELECT
+                    session.chamber,
+                    session.date,
+                    session.url,
+                    debate_title.title,
+                    paragraph.procedural_unit_type,
+                    paragraph.procedural_unit_number,
+                    speaker_detail.family_name || ', ' || speaker_detail.given_name,
+                    speaker_detail.gender,
+                    speaker_detail.party,
+                    list_aggregate(
+                        regexp_extract_all(
+                            paragraph.text,
+                            ?,
+                            0,
+                            ?
+                        ),
+                        'string_agg',
+                        ', '
+                    )as matches,
+                    paragraph.text
+                from 'data/paragraph.parquet'
+                inner join matching_units using(session_id, procedural_unit_number)
+                inner join 'data/debate_title.parquet' using(debate_id)
+                inner join 'data/session.parquet' on
+                    paragraph.session_id = session.session_id
+                -- left join because the speaker_id can be null or not mapped to anything.
+                left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
+                order by session.date, session.chamber, para_id
+                """,
+                regex_params,
+            )
+
+            workbook = Workbook()
+            worksheet = workbook.active
+
+            display(filters)
+
+            header = [
+                "chamber",
+                "date",
+                "sitting_day_url",
+                "debate_title",
+                "procedural_unit_type",
+                "procedural_unit_number",
+                "speaker_name",
+                "speaker_gender",
+                "speaker_party",
+                "text_matches",
+                "text",
+            ]
+
+            worksheet.append(header)
+
+            while row := content_query.fetchone():
+
+                worksheet.append(row)
+
+            # Update transcript link to be a proper hyperlink
+            all_rows = worksheet.rows
+            next(all_rows)  # skip header
+
+            for row in all_rows:
+                link = row[2].value
+
+                row[2].hyperlink = link
+                row[2].value = "Sitting Day Transcript"
+
+            # Zebra stripe speeches and set text to wrap
+            all_rows = worksheet.rows
+            next(all_rows)  # skip header
+
+            colour = True
+            last_speech = (None, None, None)
+
+            solid_fill = styles.PatternFill(fill_type="solid", fgColor="efefef")
+
+            for row in all_rows:
+
+                current_speech = (row[0].value, row[1].value, row[5].value)
+
+                if current_speech != last_speech:
+                    colour = not colour
+                    last_speech = current_speech
+
+                if colour:
+                    for cell in row:
+                        cell.fill = solid_fill
+
+                for cell in row:
+                    cell.alignment = styles.Alignment(
+                        wrap_text=True, vertical="top", horizontal="left"
+                    )
+
+            # Format column widths and alignments for readability
+            for i, header in enumerate(header):
+                col = worksheet.column_dimensions[get_column_letter(i + 1)]
+
+                col.width = 15
+
+                if header == "text":
+                    col.width = 50
+
+            # Freeze the header
+            worksheet.freeze_panes = "A2"
+
+            output_folder = Path("outputs")
+            output_folder.mkdir(exist_ok=True)
+            output = output_folder / "exported_speeches_AU_Federal_Parliament.xlsx"
+
+            workbook.save(output)
+
+            display(
+                HTML(f'<a href="{output}" download>Download your search results.</a>')
+            )

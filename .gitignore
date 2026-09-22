@@ -220,4 +220,5 @@ __marimo__/
 
 # Don't add the data files to the git repo
 notebooks/data
+notebooks/outputs
 *.parquet

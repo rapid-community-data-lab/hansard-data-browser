@@ -149,7 +149,8 @@ class SearchFilterSpec:
         else:
             return val
 
-    def _repr_html_(self):
+    def pretty_print_key_values(self):
+        """Pretty print the fields and values describing this search."""
 
         key_values = []
 
@@ -161,14 +162,10 @@ class SearchFilterSpec:
             key_values.append(("Match Whole Words", self.tokenised))
 
         if self.parties and "All" not in self.parties:
-            key_values.append(
-                ("Parties", h("ul")(h("li")(party) for party in self.parties))
-            )
+            key_values.append(("Parties", self.parties))
 
         if self.houses and "All" not in self.houses:
-            key_values.append(
-                ("Chamber", h("ul")(h("li")(house) for house in self.houses))
-            )
+            key_values.append(("Chamber", self.houses))
 
         if self.matching_paragraphs:
             key_values.append(("Matching Paragraphs", self.matching_paragraphs))
@@ -176,8 +173,22 @@ class SearchFilterSpec:
         if self.matching_speeches:
             key_values.append(("Matching Speeches", self.matching_speeches))
 
+        return key_values
+
+    def _repr_html_(self):
+
+        key_values = self.pretty_print_key_values()
+
         return h("dl")(
-            (h("dt")(key), h("dd")(value)) for key, value in key_values
+            (
+                h("dt")(key),
+                h("dd")(
+                    h("ul")(h("li")(v) for v in value)
+                    if isinstance(value, tuple)
+                    else value
+                ),
+            )
+            for key, value in key_values
         ).render()
 
 
@@ -479,132 +490,153 @@ class UI:
         # TODO: provenance sheet indicating the query.
 
         with self.display_transcripts:
+            try:
 
-            filters = self.get_search_filters()
+                filters = self.get_search_filters()
 
-            regex_params = filters.get_search_regex()
+                display(filters)
 
-            content_query = self.conn.execute(
-                """
-                WITH matching_units as (
-                    SELECT distinct
-                        session_id,
-                        paragraph.procedural_unit_number
-                    from 'data/paragraph.parquet'
-                    inner join matching using(para_id)
-                )
-                SELECT
-                    session.chamber,
-                    session.date,
-                    session.url,
-                    debate_title.title,
-                    paragraph.procedural_unit_type,
-                    paragraph.procedural_unit_number,
-                    speaker_detail.family_name || ', ' || speaker_detail.given_name,
-                    speaker_detail.gender,
-                    speaker_detail.party,
-                    list_aggregate(
-                        regexp_extract_all(
-                            paragraph.text,
-                            ?,
-                            0,
-                            ?
-                        ),
-                        'string_agg',
-                        ', '
-                    )as matches,
-                    paragraph.text
-                from 'data/paragraph.parquet'
-                inner join matching_units using(session_id, procedural_unit_number)
-                inner join 'data/debate_title.parquet' using(debate_id)
-                inner join 'data/session.parquet' on
-                    paragraph.session_id = session.session_id
-                -- left join because the speaker_id can be null or not mapped to anything.
-                left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
-                order by session.date, session.chamber, para_id
-                """,
-                regex_params,
-            )
+                regex_params = filters.get_search_regex()
 
-            workbook = Workbook()
-            worksheet = workbook.active
-
-            display(filters)
-
-            header = [
-                "chamber",
-                "date",
-                "sitting_day_url",
-                "debate_title",
-                "procedural_unit_type",
-                "procedural_unit_number",
-                "speaker_name",
-                "speaker_gender",
-                "speaker_party",
-                "text_matches",
-                "text",
-            ]
-
-            worksheet.append(header)
-
-            while row := content_query.fetchone():
-
-                worksheet.append(row)
-
-            # Update transcript link to be a proper hyperlink
-            all_rows = worksheet.rows
-            next(all_rows)  # skip header
-
-            for row in all_rows:
-                link = row[2].value
-
-                row[2].hyperlink = link
-                row[2].value = "Sitting Day Transcript"
-
-            # Zebra stripe speeches and set text to wrap
-            all_rows = worksheet.rows
-            next(all_rows)  # skip header
-
-            colour = True
-            last_speech = (None, None, None)
-
-            solid_fill = styles.PatternFill(fill_type="solid", fgColor="efefef")
-
-            for row in all_rows:
-
-                current_speech = (row[0].value, row[1].value, row[5].value)
-
-                if current_speech != last_speech:
-                    colour = not colour
-                    last_speech = current_speech
-
-                if colour:
-                    for cell in row:
-                        cell.fill = solid_fill
-
-                for cell in row:
-                    cell.alignment = styles.Alignment(
-                        wrap_text=True, vertical="top", horizontal="left"
+                content_query = self.conn.execute(
+                    """
+                    WITH matching_units as (
+                        SELECT distinct
+                            session_id,
+                            paragraph.procedural_unit_number
+                        from 'data/paragraph.parquet'
+                        inner join matching using(para_id)
                     )
+                    SELECT
+                        session.chamber,
+                        session.date,
+                        session.url,
+                        debate_title.title,
+                        paragraph.procedural_unit_type,
+                        paragraph.procedural_unit_number,
+                        speaker_detail.family_name || ', ' || speaker_detail.given_name,
+                        speaker_detail.gender,
+                        speaker_detail.party,
+                        list_aggregate(
+                            regexp_extract_all(
+                                paragraph.text,
+                                ?,
+                                0,
+                                ?
+                            ),
+                            'string_agg',
+                            ', '
+                        ) as matches,
+                        paragraph.text
+                    from 'data/paragraph.parquet'
+                    inner join matching_units using(session_id, procedural_unit_number)
+                    inner join 'data/debate_title.parquet' using(debate_id)
+                    inner join 'data/session.parquet' on
+                        paragraph.session_id = session.session_id
+                    -- left join because the speaker_id can be null or not mapped to anything.
+                    left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
+                    order by session.date, session.chamber, para_id
+                    """,
+                    regex_params,
+                )
 
-            # Format column widths and alignments for readability
-            for i, header in enumerate(header):
-                col = worksheet.column_dimensions[get_column_letter(i + 1)]
+                workbook = Workbook()
 
-                col.width = 15
+                workbook.create_sheet("proceedings")
 
-                if header == "text":
-                    col.width = 50
+                workbook.create_sheet("provenance")
+                worksheet = workbook["provenance"]
 
-            # Freeze the header
-            worksheet.freeze_panes = "A2"
+                worksheet.append(["Field", "Value"])
+                for field, value in filters.pretty_print_key_values():
+                    v = value
+                    if isinstance(value, tuple):
+                        v = ", ".join(value)
+                    worksheet.append((field, v))
 
-            output_folder = Path("outputs")
-            output_folder.mkdir(exist_ok=True)
-            output = output_folder / "exported_speeches_AU_Federal_Parliament.xlsx"
+                workbook.remove(workbook["Sheet"])
 
-            workbook.save(output)
+                worksheet = workbook["proceedings"]
 
-            display(
-                HTML(f'<a href="{output}" download>Download your search results.</a>')
-            )
+                header = [
+                    "chamber",
+                    "date",
+                    "sitting_day_url",
+                    "debate_title",
+                    "procedural_unit_type",
+                    "procedural_unit_number",
+                    "speaker_name",
+                    "speaker_gender",
+                    "speaker_party",
+                    "text_matches",
+                    "text",
+                ]
+
+                worksheet.append(header)
+
+                while row := content_query.fetchone():
+                    worksheet.append(row)
+
+                # Update transcript link to be a proper hyperlink
+                all_rows = worksheet.rows
+                next(all_rows)  # skip header
+
+                for row in all_rows:
+                    link = row[2].value
+
+                    row[2].hyperlink = link
+                    row[2].value = "Sitting Day Transcript"
+
+                # Zebra stripe speeches and set text to wrap
+                all_rows = worksheet.rows
+                next(all_rows)  # skip header
+
+                colour = True
+                last_speech = (None, None, None)
+
+                solid_fill = styles.PatternFill(fill_type="solid", fgColor="efefef")
+
+                for row in all_rows:
+
+                    current_speech = (row[0].value, row[1].value, row[5].value)
+
+                    if current_speech != last_speech:
+                        colour = not colour
+                        last_speech = current_speech
+
+                    if colour:
+                        for cell in row:
+                            cell.fill = solid_fill
+
+                    for cell in row:
+                        cell.alignment = styles.Alignment(
+                            wrap_text=True, vertical="top", horizontal="left"
+                        )
+
+                # Format column widths and alignments for readability
+                for i, header in enumerate(header):
+                    col = worksheet.column_dimensions[get_column_letter(i + 1)]
+
+                    col.width = 15
+
+                    if header == "text":
+                        col.width = 50
+
+                # Freeze the header
+                worksheet.freeze_panes = "A2"
+
+                output_folder = Path("outputs")
+                output_folder.mkdir(exist_ok=True)
+                output = output_folder / "exported_speeches_AU_Federal_Parliament.xlsx"
+
+                workbook.save(output)
+
+                display(
+                    HTML(
+                        f'<a href="{output}" download>Download your search results.</a>'
+                    )
+                )
+
+            except Exception as e:
+                display(e)
+                print("something went wrong")

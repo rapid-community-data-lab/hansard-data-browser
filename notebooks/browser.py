@@ -22,9 +22,12 @@
 #
 # Run this notebook by hitting the ▶▶ ("restart kernel and run all cells") button in the
 # menu above - you'll be asked if you want to restart this notebook - answer 'yes' and
-# the notebook will be run. Follow the prompts to set your search parameters, read and
-# adjust your query based on the results, then hit export to create a spreadsheet of
-# all the matching items.
+# the notebook will be run.
+#
+# Follow the prompts to set your search parameters, read and adjust your query based on
+# the results, then hit `Export results` to generate a spreadsheet of the matching
+# speeches. A progress bar will appear during processing and when complete a link to
+# download the results will appear.
 #
 # ## Dataset Availability
 #

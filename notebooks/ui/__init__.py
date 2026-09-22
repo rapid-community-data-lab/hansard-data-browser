@@ -40,7 +40,6 @@ import ipywidgets as widgets
 
 @dc.dataclass
 class SearchFilterSpec:
-
     start_year: int = 1901
     end_year: int = 3000
     text: str = ""
@@ -52,13 +51,15 @@ class SearchFilterSpec:
     matching_speeches: int = 0
 
     def __post_init__(self):
-
         # If all is selected that's the only one that matters.
         if "All" in self.parties:
             self.parties = ("All",)
 
         if "All" in self.houses:
             self.houses = ("All",)
+
+    def __str__(self):
+        return ", ".join(f"{k}: {v}" for k, v in self.pretty_print_key_values())
 
     def create_query(self) -> list[str, list[Any]]:
         """
@@ -104,7 +105,6 @@ class SearchFilterSpec:
         params.extend((self.start_year, self.end_year))
 
         if self.text:
-
             search, options = self.get_search_regex()
 
             if isinstance(search, list):
@@ -161,20 +161,22 @@ class SearchFilterSpec:
 
         key_values = []
 
-        key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
-
         if self.text:
             search_description = {
                 k: v
                 for v, k in (
                     ("Match any word", "word-any"),
                     ("Match all words", "word-all"),
-                    ("Match regular expression", "regex"),
+                    ("Match regex", "regex"),
                 )
             }[self.search_type]
             key_values.append(("Search", self.text))
+            key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
             key_values.append(("Case Sensitive", self.case_sensitive))
             key_values.append(("Search Type", search_description))
+
+        else:
+            key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
 
         if self.parties and "All" not in self.parties:
             key_values.append(("Parties", self.parties))
@@ -191,7 +193,6 @@ class SearchFilterSpec:
         return key_values
 
     def _repr_html_(self):
-
         key_values = self.pretty_print_key_values()
 
         return h("dl")(
@@ -209,12 +210,10 @@ class SearchFilterSpec:
 
 @dc.dataclass
 class SearchResults:
-
     rows: iterable
     highlight_re: re.Pattern | None = None
 
     def _replace_match(self, match):
-
         return f"<mark>{match.group(0)}</mark>"
 
     def render_row(self, row):
@@ -240,9 +239,7 @@ class SearchResults:
 
 
 class UI:
-
     def __init__(self) -> None:
-
         # Initialise db
         self.conn = duckdb.connect()
 
@@ -252,11 +249,20 @@ class UI:
 
         self.result_counts = (0, 0)
 
+        self.search_history = []
+
         # setup all the UI elements.
-        button_layout = widgets.Layout(width="90%", height="2lh")
-        wide_layout = widgets.Layout(width="90%")
-        selector_layout = widgets.Layout(width="95%")
-        style = {"description_width": "25%"}
+        button_layout = widgets.Layout(width="98%", height="2lh")
+        wide_layout = widgets.Layout(width="98%")
+        selector_layout = widgets.Layout(width="98%")
+        style = {"description_width": "20%"}
+
+        self.search_history_picker = widgets.Select(
+            options=[],
+            description="Go back to:",
+            layout=wide_layout,
+            style=style,
+        )
 
         self.search_text = widgets.Text(
             value="",
@@ -291,7 +297,7 @@ class UI:
         self.parties = widgets.SelectMultiple(
             value=["All"],
             options=sorted(party_options),
-            description="Parties",
+            description="Parties:",
             style=style,
             layout=selector_layout,
         )
@@ -331,6 +337,7 @@ class UI:
             style=style,
         )
 
+        # Shown only during export.
         self.progress_bar = widgets.IntProgress(
             value=1,
             min=1,
@@ -342,11 +349,19 @@ class UI:
             layout=wide_layout,
         )
 
+        # Run from the search tab.
         self.run_button = widgets.Button(
             description="Search",
             layout=wide_layout,
         )
         self.run_button.on_click(self.run_search)
+
+        # Run from the history tab
+        self.rerun_button = widgets.Button(
+            description="Search",
+            layout=wide_layout,
+        )
+        self.rerun_button.on_click(self.rerun_search)
 
         self.export_button = widgets.Button(
             description="Export Results",
@@ -374,8 +389,8 @@ class UI:
 
         self.space_widget = widgets.Output(layout=wide_layout)
 
-        # Container for the final output
-        self.display_ui = widgets.VBox(
+        # Assemble the search controller
+        self.search_ui = widgets.VBox(
             [
                 widgets.HBox(
                     [self.search_text, self.search_type],
@@ -388,11 +403,26 @@ class UI:
                 widgets.HBox([self.parties, self.houses], layout=wide_layout),
                 widgets.HBox([self.start_year, self.end_year], layout=wide_layout),
                 self.run_button,
+            ]
+        )
+
+        self.history_ui = widgets.VBox([self.search_history_picker, self.rerun_button])
+        # Tabbed layout, one for the search, one to display the history.
+        self.tabs = widgets.Tab()
+
+        self.tabs.children = [self.search_ui, self.history_ui]
+        self.tabs.titles = ["Search", "History"]
+
+        self.ui = widgets.VBox(
+            [
+                self.tabs,
                 self.display_transcripts,
             ]
         )
 
-        display(self.display_ui)
+        # Container for the final output
+
+        display(self.ui)
 
     def get_search_filters(self) -> SearchFilterSpec:
         """Get the current state of the search filters."""
@@ -418,8 +448,21 @@ class UI:
         """
 
         self.search_text.value = filters.text
+        self.search_type.value = filters.search_type
+        self.case_sensitive.value = filters.case_sensitive
+
         self.start_year.value = filters.start_year
         self.end_year.value = filters.end_year
+        self.parties.value = filters.parties
+        self.houses.value = filters.houses
+
+        self.result_counts = (filters.matching_paragraphs, filters.matching_speeches)
+
+    def rerun_search(self, button) -> None:
+        """Make the chosen history item into the active search."""
+
+        self.set_search_filters(self.search_history[self.search_history_picker.value])
+        self.run_search(button)
 
     def matching_transcript_rows(self, n_results=50, offset=0):
         """Retrieve the matching rows of the last run query."""
@@ -497,16 +540,28 @@ class UI:
 
             with self.display_transcripts:
                 self.conn.execute(query, params)
-                self.result_counts = self.conn.execute("""
+                self.result_counts = self.conn.execute(
+                    """
                     SELECT
                         count(*),
                         count(distinct (session_id, procedural_unit_number))
                     from matching
                     inner join 'data/paragraph.parquet' using(para_id)
-                    """).fetchall()[0]
+                    """
+                ).fetchall()[0]
                 display(self.get_search_filters())
                 self.current_offset = 0
                 self.current_results_page()
+
+            # Update with result count
+            filters = self.get_search_filters()
+
+            # Setup history tab
+            self.search_history.append(filters)
+            self.search_history_picker.options = [
+                (str(f), i) for i, f in enumerate(self.search_history)
+            ]
+            self.search_history_picker.value = len(self.search_history) - 1
 
         except Exception as e:
             with self.display_transcripts:
@@ -526,7 +581,6 @@ class UI:
 
         with self.display_transcripts:
             try:
-
                 filters = self.get_search_filters()
                 display(h("h2")("Search Overview"))
                 display(filters)
@@ -538,7 +592,8 @@ class UI:
                     regex_params = ("|".join(regex_params[0]), regex_params[1])
 
                 # Calculate the total rows for the export progress
-                total_rows = self.conn.execute("""
+                total_rows = self.conn.execute(
+                    """
                     WITH matching_units as (
                         SELECT distinct
                             session_id,
@@ -549,7 +604,8 @@ class UI:
                     select count(*)
                     from 'data/paragraph.parquet'
                     inner join matching_units using(session_id, procedural_unit_number)
-                    """).fetchall()[0][0]
+                    """
+                ).fetchall()[0][0]
 
                 self.progress_bar.value = 1
                 self.progress_bar.max = total_rows * 3
@@ -629,6 +685,19 @@ class UI:
                         v = ", ".join(value)
                     worksheet.append((field, v))
 
+                workbook.create_sheet("search_log")
+                worksheet = workbook["search_log"]
+
+                log_header = [f.name for f in dc.fields(SearchFilterSpec)]
+                worksheet.append(["session_search_number", *log_header])
+
+                for i, f in enumerate(self.search_history):
+                    row = list(dc.astuple(f))
+                    row[5] = ", ".join(row[5])
+                    row[6] = ", ".join(row[6])
+
+                    worksheet.append([i + 1, *row])
+
                 workbook.remove(workbook["Sheet"])
 
                 worksheet = workbook["proceedings"]
@@ -691,7 +760,6 @@ class UI:
                 solid_fill = styles.PatternFill(fill_type="solid", fgColor="efefef")
 
                 for row in all_rows:
-
                     current_speech = (row[0].value, row[1].value, row[5].value)
 
                     if current_speech != last_speech:

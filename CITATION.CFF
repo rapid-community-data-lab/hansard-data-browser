@@ -1,0 +1,23 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Hansard Data Browser (Notebook)
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - orcid: 'https://orcid.org/0000-0002-1824-2361'
+    given-names: Samuel
+    family-names: Hames
+    affiliation: The University of Queensland
+repository-code: >-
+  https://github.com/rapid-community-data-lab/hansard-data-browser
+url: 'https://rapid-cdl.edu.au'
+abstract: >-
+  A little notebook to access and perform basic queries over
+  an analytical database created from the Proceedings of
+  Australian Federal Parliament.
+license: AGPL-3.0-or-later
+date-released: '2026-09-22'

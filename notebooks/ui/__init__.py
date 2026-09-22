@@ -24,6 +24,7 @@ not anything they said before or after.
 """
 
 from pathlib import Path
+from typing import Literal
 import dataclasses as dc
 import datetime as dt
 import re
@@ -43,7 +44,7 @@ class SearchFilterSpec:
     start_year: int = 1901
     end_year: int = 3000
     text: str = ""
-    tokenised: bool = True
+    search_type: Literal["word-any", "word-all", "regex"] = "word-any"
     case_sensitive: bool = False
     parties: list[str] = dc.field(default_factory=list)
     houses: list[str] = dc.field(default_factory=list)
@@ -104,11 +105,15 @@ class SearchFilterSpec:
 
         if self.text:
 
-            regex_params = self.get_search_regex()
+            search, options = self.get_search_regex()
 
-            clauses.append("regexp_matches(text, ?, ?)")
-
-            params.extend(regex_params)
+            if isinstance(search, list):
+                for s in search:
+                    clauses.append("regexp_matches(text, ?, ?)")
+                    params.extend((s, options))
+            else:
+                clauses.append("regexp_matches(text, ?, ?)")
+                params.extend((search, options))
 
         join = "\n".join(joins)
         where = " and\n".join(clauses)
@@ -120,10 +125,16 @@ class SearchFilterSpec:
         """Get the regular expression to be used as the text search."""
         options = "c" if self.case_sensitive else "i"
 
-        if self.tokenised:
+        if self.search_type == "word-any":
             search = "|".join(rf"\b{t}\b" for t in self.text.split())
-        else:
+
+        elif self.search_type == "word-all":
+            search = [rf"\b{t}\b" for t in self.text.split()]
+
+        elif self.search_type == "regex":
             search = self.text
+        else:
+            raise ValueError(f"Unknown search type: {self.search_type}")
 
         return (search, options)
 
@@ -137,19 +148,13 @@ class SearchFilterSpec:
         """
         options = re.NOFLAG if self.case_sensitive else re.IGNORECASE
 
-        if self.tokenised:
+        # Highlighting should cover all words, even with searching for word-all (And)
+        if self.search_type in ("word-any", "word-all"):
             search = "|".join(rf"\b{t}\b" for t in self.text.split())
         else:
             search = self.text
 
         return re.compile(search, flags=options)
-
-    def _repr_list(self, val):
-
-        if isinstance(val, tuple):
-            return h("ul")([h("li")(v) for v in val])
-        else:
-            return val
 
     def pretty_print_key_values(self):
         """Pretty print the fields and values describing this search."""
@@ -159,9 +164,17 @@ class SearchFilterSpec:
         key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
 
         if self.text:
+            search_description = {
+                k: v
+                for v, k in (
+                    ("Match any word", "word-any"),
+                    ("Match all words", "word-all"),
+                    ("Match regular expression", "regex"),
+                )
+            }[self.search_type]
             key_values.append(("Search", self.text))
             key_values.append(("Case Sensitive", self.case_sensitive))
-            key_values.append(("Match Whole Words", self.tokenised))
+            key_values.append(("Search Type", search_description))
 
         if self.parties and "All" not in self.parties:
             key_values.append(("Parties", self.parties))
@@ -253,8 +266,16 @@ class UI:
             style=style,
         )
 
-        self.tokenised = widgets.Checkbox(
-            value=True, description="Search for whole words"
+        self.search_type = widgets.Dropdown(
+            value="word-any",
+            options=[
+                ("Match any word", "word-any"),
+                ("Match all words", "word-all"),
+                ("Match regular expression", "regex"),
+            ],
+            description="Search type:",
+            layout=wide_layout,
+            style=style,
         )
         self.case_sensitive = widgets.Checkbox(
             value=False, description="Case sensitive"
@@ -349,22 +370,23 @@ class UI:
             [self.prev_page_button, self.next_page_button], layout=wide_layout
         )
 
-        self.display_transcripts = widgets.Output()
+        self.display_transcripts = widgets.Output(layout=wide_layout)
+
+        self.space_widget = widgets.Output(layout=wide_layout)
 
         # Container for the final output
         self.display_ui = widgets.VBox(
             [
-                self.search_text,
                 widgets.HBox(
-                    [self.tokenised, self.case_sensitive],
-                    layout=widgets.Layout(width="90%"),
+                    [self.search_text, self.search_type],
+                    layout=wide_layout,
                 ),
                 widgets.HBox(
-                    [self.parties, self.houses], layout=widgets.Layout(width="90%")
+                    [self.space_widget, self.case_sensitive],
+                    layout=wide_layout,
                 ),
-                widgets.HBox(
-                    [self.start_year, self.end_year], layout=widgets.Layout(width="90%")
-                ),
+                widgets.HBox([self.parties, self.houses], layout=wide_layout),
+                widgets.HBox([self.start_year, self.end_year], layout=wide_layout),
                 self.run_button,
                 self.display_transcripts,
             ]
@@ -381,7 +403,7 @@ class UI:
             end_year=self.end_year.value,
             parties=self.parties.value,
             houses=self.houses.value,
-            tokenised=self.tokenised.value,
+            search_type=self.search_type.value,
             case_sensitive=self.case_sensitive.value,
             matching_paragraphs=self.result_counts[0],
             matching_speeches=self.result_counts[1],

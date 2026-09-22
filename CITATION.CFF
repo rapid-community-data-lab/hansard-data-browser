@@ -12,6 +12,12 @@ authors:
     given-names: Samuel
     family-names: Hames
     affiliation: The University of Queensland
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22887645
+    description: >-
+      The concept DOI for all versions of this notebook
+      tool.
 repository-code: >-
   https://github.com/rapid-community-data-lab/hansard-data-browser
 url: 'https://rapid-cdl.edu.au'

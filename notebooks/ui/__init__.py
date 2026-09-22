@@ -26,6 +26,7 @@ not anything they said before or after.
 from pathlib import Path
 import dataclasses as dc
 import re
+import time
 
 from IPython.display import HTML
 from openpyxl import Workbook, styles
@@ -308,6 +309,17 @@ class UI:
             style=style,
         )
 
+        self.progress_bar = widgets.IntProgress(
+            value=1,
+            min=1,
+            max=1,
+            description="Export Progress:",
+            bar_style="info",
+            orientation="horizontal",
+            style=style,
+            layout=wide_layout,
+        )
+
         self.run_button = widgets.Button(
             description="Search",
             layout=wide_layout,
@@ -493,10 +505,30 @@ class UI:
             try:
 
                 filters = self.get_search_filters()
-
+                display(h("h2")("Search Overview"))
                 display(filters)
 
                 regex_params = filters.get_search_regex()
+
+                # Calculate the total rows for the export progress
+                total_rows = self.conn.execute("""
+                    WITH matching_units as (
+                        SELECT distinct
+                            session_id,
+                            paragraph.procedural_unit_number
+                        from 'data/paragraph.parquet'
+                        inner join matching using(para_id)
+                    )
+                    select count(*)
+                    from 'data/paragraph.parquet'
+                    inner join matching_units using(session_id, procedural_unit_number)
+                    """).fetchall()[0][0]
+
+                self.progress_bar.value = 1
+                self.progress_bar.max = total_rows * 3
+
+                display(h("h2")("Exporting"))
+                display(self.progress_bar)
 
                 content_query = self.conn.execute(
                     """
@@ -574,8 +606,18 @@ class UI:
 
                 worksheet.append(header)
 
+                last_update = time.monotonic()
+                written_rows = 0
                 while row := content_query.fetchone():
                     worksheet.append(row)
+                    written_rows += 1
+
+                    if time.monotonic() - last_update > 0.2:
+                        self.progress_bar.value += written_rows
+                        written_rows = 0
+                        last_update = time.monotonic()
+
+                self.progress_bar.value += written_rows
 
                 # Update transcript link to be a proper hyperlink
                 all_rows = worksheet.rows
@@ -586,6 +628,13 @@ class UI:
 
                     row[2].hyperlink = link
                     row[2].value = "Sitting Day Transcript"
+
+                    written_rows += 1
+
+                    if time.monotonic() - last_update > 0.2:
+                        self.progress_bar.value += written_rows
+                        written_rows = 0
+                        last_update = time.monotonic()
 
                 # Zebra stripe speeches and set text to wrap
                 all_rows = worksheet.rows
@@ -612,6 +661,13 @@ class UI:
                         cell.alignment = styles.Alignment(
                             wrap_text=True, vertical="top", horizontal="left"
                         )
+
+                    written_rows += 1
+
+                    if time.monotonic() - last_update > 0.2:
+                        self.progress_bar.value += written_rows
+                        written_rows = 0
+                        last_update = time.monotonic()
 
                 # Format column widths and alignments for readability
                 for i, header in enumerate(header):

@@ -25,6 +25,7 @@ not anything they said before or after.
 
 from pathlib import Path
 import dataclasses as dc
+import datetime as dt
 import re
 import time
 
@@ -580,7 +581,23 @@ class UI:
                 worksheet = workbook["provenance"]
 
                 worksheet.append(["Field", "Value"])
-                for field, value in filters.pretty_print_key_values():
+
+                field_values = filters.pretty_print_key_values()
+
+                # Very basic provenance information.
+                field_values.extend(
+                    (
+                        ("dateCreated", dt.datetime.now()),
+                        ("wasGeneratedBy", "https://doi.org/10.5281/zenodo.22887645"),
+                        ("derivedFrom", "https://doi.org/10.5281/zenodo.22868754"),
+                        (
+                            "hadPrimarySource",
+                            "https://parlinfo.aph.gov.au/parlInfo/search/search.w3p",
+                        ),
+                    )
+                )
+
+                for field, value in field_values:
                     v = value
                     if isinstance(value, tuple):
                         v = ", ".join(value)

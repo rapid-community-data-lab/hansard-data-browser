@@ -533,6 +533,10 @@ class UI:
 
                 regex_params = filters.get_search_regex()
 
+                # Glue the match all words back into a regex to extract all instances.
+                if isinstance(regex_params[0], list):
+                    regex_params = ("|".join(regex_params[0]), regex_params[1])
+
                 # Calculate the total rows for the export progress
                 total_rows = self.conn.execute("""
                     WITH matching_units as (
@@ -675,6 +679,8 @@ class UI:
                         written_rows = 0
                         last_update = time.monotonic()
 
+                self.progress_bar.value += written_rows
+
                 # Zebra stripe speeches and set text to wrap
                 all_rows = worksheet.rows
                 next(all_rows)  # skip header
@@ -707,6 +713,8 @@ class UI:
                         self.progress_bar.value += written_rows
                         written_rows = 0
                         last_update = time.monotonic()
+
+                self.progress_bar.value += written_rows
 
                 # Format column widths and alignments for readability
                 for i, header in enumerate(header):

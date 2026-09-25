@@ -37,12 +37,17 @@
 #
 # This dataset was prepared by the Reusable and Accessible Public Interest Documents project (RAPID-CDL). RAPID-CDL is a co-investment partnership with the Australian Research Data Commons (ARDC) through the HASS and Indigenous Research Data Commons (DOI: 10.3565/y37z-4y53). The ARDC is enabled by the Australian Government’s National Collaborative Research Infrastructure Strategy (NCRIS).
 #
-# You can cite this tool and the underlying dataset as follows:
+# A suggested citation for this tool is:
+#
+# > Hames, S. (2026). Hansard Data Browser (Notebook). https://doi.org/10.5281/zenodo.20606858
+#
+# A suggested citation for the underlying dataset is:
+#
+# > Hames, S., & Alpert, E. (2026). Proceedings of Australian Federal Parliament: An Analytical Database. https://doi.org/10.5281/zenodo.22868754
 #
 
 # %%
 from ui import UI
-
 interface = UI()
 
 # %% [markdown]

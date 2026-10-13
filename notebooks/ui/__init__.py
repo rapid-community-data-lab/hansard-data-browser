@@ -484,7 +484,7 @@ class UI:
                 paragraph.session_id = session.session_id
             -- left join because the speaker_id can be null or not mapped to anything.
             left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
-            order by session.date, session.chamber, para_id
+            order by session.date desc, session.chamber, para_id
             limit ?
             offset ?
             """,

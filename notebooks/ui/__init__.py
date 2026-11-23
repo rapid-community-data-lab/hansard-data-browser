@@ -39,12 +39,56 @@ import ipywidgets as widgets
 
 
 @dc.dataclass
-class SearchFilterSpec:
-    start_year: int = 1901
-    end_year: int = 3000
+class TextSearchSpec:
     text: str = ""
     search_type: Literal["word-any", "word-all", "regex"] = "word-any"
     case_sensitive: bool = False
+    search_fields: tuple[Literal["body", "title"]] = ("body",)
+
+    def get_search_regex(self):
+        """Get the regular expression to be used as the text search."""
+        options = "c" if self.case_sensitive else "i"
+
+        if self.search_type == "word-any":
+            search = "|".join(rf"\b{t}\b" for t in self.text.split())
+
+        elif self.search_type == "word-all":
+            search = [rf"\b{t}\b" for t in self.text.split()]
+
+        # todo: add phrase search here specifically
+
+        elif self.search_type == "regex":
+            search = self.text
+        else:
+            raise ValueError(f"Unknown search type: {self.search_type}")
+
+        return (search, options)
+
+    def highlight_regex(self):
+        """
+        Return a regular expression that can be used to highlight search matches.
+
+        There may be some edges cases where the Python re module does not have the
+        same beahviour as the re2 module used in duckdb...
+
+        """
+        options = re.NOFLAG if self.case_sensitive else re.IGNORECASE
+
+        # Highlighting should cover all words, even with searching for word-all (And)
+        if self.search_type in ("word-any", "word-all"):
+            search = "|".join(rf"\b{t}\b" for t in self.text.split())
+        else:
+            search = self.text
+
+        return re.compile(search, flags=options)
+
+
+@dc.dataclass
+class SearchFilterSpec:
+    start_year: int = 1901
+    end_year: int = 3000
+    text_searches: list[TextSearchSpec] = dc.field(default_factory=list)
+    combine_text_searches: Literal["any", "all"] = "any"
     parties: list[str] = dc.field(default_factory=list)
     houses: list[str] = dc.field(default_factory=list)
     matching_paragraphs: int = 0
@@ -104,8 +148,8 @@ class SearchFilterSpec:
         )
         params.extend((self.start_year, self.end_year))
 
-        if self.text:
-            search, options = self.get_search_regex()
+        for text_search in self.text_searches:
+            search, options = text_search.get_search_regex()
 
             if isinstance(search, list):
                 for s in search:
@@ -121,62 +165,38 @@ class SearchFilterSpec:
 
         return query, params
 
-    def get_search_regex(self):
-        """Get the regular expression to be used as the text search."""
-        options = "c" if self.case_sensitive else "i"
-
-        if self.search_type == "word-any":
-            search = "|".join(rf"\b{t}\b" for t in self.text.split())
-
-        elif self.search_type == "word-all":
-            search = [rf"\b{t}\b" for t in self.text.split()]
-
-        elif self.search_type == "regex":
-            search = self.text
-        else:
-            raise ValueError(f"Unknown search type: {self.search_type}")
-
-        return (search, options)
-
-    def highlight_regex(self):
+    def highlight_regexps(self):
         """
-        Return a regular expression that can be used to highlight search matches.
+        Return a list of regular expression that can be used to highlight search matches.
 
         There may be some edges cases where the Python re module does not have the
         same beahviour as the re2 module used in duckdb...
 
         """
-        options = re.NOFLAG if self.case_sensitive else re.IGNORECASE
 
-        # Highlighting should cover all words, even with searching for word-all (And)
-        if self.search_type in ("word-any", "word-all"):
-            search = "|".join(rf"\b{t}\b" for t in self.text.split())
-        else:
-            search = self.text
-
-        return re.compile(search, flags=options)
+        return [text_search.highlight_regex() for text_search in self.text_searches]
 
     def pretty_print_key_values(self):
         """Pretty print the fields and values describing this search."""
 
         key_values = []
 
-        if self.text:
-            search_description = {
-                k: v
-                for v, k in (
-                    ("Match any word", "word-any"),
-                    ("Match all words", "word-all"),
-                    ("Match regex", "regex"),
-                )
-            }[self.search_type]
-            key_values.append(("Search", self.text))
-            key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
-            key_values.append(("Case Sensitive", self.case_sensitive))
-            key_values.append(("Search Type", search_description))
+        key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
 
-        else:
-            key_values.append(("Years", f"{self.start_year}/{self.end_year}"))
+        search_descriptions = {
+            k: v
+            for v, k in (
+                ("Match any word", "word-any"),
+                ("Match all words", "word-all"),
+                ("Match regex", "regex"),
+            )
+        }
+        for text_search in self.text_searches:
+            key_values.append(("Search", text_search.text))
+            key_values.append(
+                ("Search Type", search_descriptions[text_search.search_type])
+            )
+            key_values.append(("Case Sensitive", text_search.case_sensitive))
 
         if self.parties and "All" not in self.parties:
             key_values.append(("Parties", self.parties))
@@ -211,17 +231,55 @@ class SearchFilterSpec:
 @dc.dataclass
 class SearchResults:
     rows: iterable
-    highlight_re: re.Pattern | None = None
+    highlight_regexps: list[re.Pattern] = dc.field(default_factory=list)
 
-    def _replace_match(self, match):
-        return f"<mark>{match.group(0)}</mark>"
+    def highlight_matches(self, text):
+        spans = []
+        for highlighter in self.highlight_regexps:
+            spans.extend(m.span() for m in highlighter.finditer(text))
+
+        resolved_spans = set()
+
+        current_start = -1
+        current_end = -1
+
+        for start, end in sorted(spans):
+            # New highlight segment
+            if start > current_end:
+                if current_start >= 0:
+                    resolved_spans.add((current_start, current_end))
+
+                current_start = start
+                current_end = end
+
+            # Otherwise potentially extend current segment
+            elif end > current_end:
+                current_end = end
+
+        # Make sure the final segment is added
+        if current_start >= 0:
+            resolved_spans.add((current_start, current_end))
+
+        string_builder = []
+
+        current_point = 0
+
+        for start, end in sorted(resolved_spans):
+            string_builder.extend(
+                (text[current_point:start], "<mark>", text[start:end], "</mark>")
+            )
+            current_point = end
+
+        # The rest of the string
+        string_builder.append(text[current_point:])
+
+        return raw("".join(string_builder))
 
     def render_row(self, row):
         """Render a single row nice and compact."""
         text = row[6]
 
-        if self.highlight_re is not None:
-            text = raw(self.highlight_re.sub(self._replace_match, text))
+        text = self.highlight_matches(text)
 
         speaker_detail = None
         if row[5] or row[4]:
@@ -428,13 +486,17 @@ class UI:
         """Get the current state of the search filters."""
 
         return SearchFilterSpec(
-            text=self.search_text.value,
+            text_searches=(
+                TextSearchSpec(
+                    self.search_text.value,
+                    search_type=self.search_type.value,
+                    case_sensitive=self.case_sensitive.value,
+                ),
+            ),
             start_year=self.start_year.value,
             end_year=self.end_year.value,
             parties=self.parties.value,
             houses=self.houses.value,
-            search_type=self.search_type.value,
-            case_sensitive=self.case_sensitive.value,
             matching_paragraphs=self.result_counts[0],
             matching_speeches=self.result_counts[1],
         )
@@ -507,7 +569,7 @@ class UI:
             display(
                 SearchResults(
                     self.matching_transcript_rows(offset=self.current_offset),
-                    highlight_re=filters.highlight_regex(),
+                    highlight_regexps=filters.highlight_regexps(),
                 )
             )
             display(self.pagination)

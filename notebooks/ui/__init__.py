@@ -22,7 +22,7 @@ who changed party will only match for that party during the time they were a mem
 not anything they said before or after.
 
 """
-
+from collections import defaultdict
 from pathlib import Path
 from typing import Literal
 import dataclasses as dc
@@ -43,7 +43,7 @@ class TextSearchSpec:
     text: str = ""
     search_type: Literal["word-any", "word-all", "regex"] = "word-any"
     case_sensitive: bool = False
-    search_fields: tuple[Literal["body", "title"]] = ("body",)
+    search_fields: tuple[Literal["text", "title"]] = ("text",)
 
     def get_search_regex(self):
         """Get the regular expression to be used as the text search."""
@@ -124,6 +124,7 @@ class SearchFilterSpec:
                     paragraph.para_id
                 from 'data/paragraph.parquet'
                 inner join 'data/session.parquet' using (session_id)
+                inner join 'data/debate_title.parquet' using (debate_id)
                 {}
                 where {}
 
@@ -151,13 +152,14 @@ class SearchFilterSpec:
         for text_search in self.text_searches:
             search, options = text_search.get_search_regex()
 
-            if isinstance(search, list):
-                for s in search:
-                    clauses.append("regexp_matches(text, ?, ?)")
-                    params.extend((s, options))
-            else:
-                clauses.append("regexp_matches(text, ?, ?)")
-                params.extend((search, options))
+            for field in text_search.search_fields:
+                if isinstance(search, list):
+                    for s in search:
+                        clauses.append(f"regexp_matches({field}, ?, ?)")
+                        params.extend((s, options))
+                else:
+                    clauses.append(f"regexp_matches({field}, ?, ?)")
+                    params.extend((search, options))
 
         join = "\n".join(joins)
         where = " and\n".join(clauses)
@@ -173,8 +175,13 @@ class SearchFilterSpec:
         same beahviour as the re2 module used in duckdb...
 
         """
+        highlighters = defaultdict(list)
 
-        return [text_search.highlight_regex() for text_search in self.text_searches]
+        for text_search in self.text_searches:
+            for field in text_search.search_fields:
+                highlighters[field].append(text_search.highlight_regex())
+
+        return highlighters
 
     def pretty_print_key_values(self):
         """Pretty print the fields and values describing this search."""
@@ -231,11 +238,11 @@ class SearchFilterSpec:
 @dc.dataclass
 class SearchResults:
     rows: iterable
-    highlight_regexps: list[re.Pattern] = dc.field(default_factory=list)
+    highlight_regexps: dict[str, re.Pattern] = dc.field(default_factory=list)
 
-    def highlight_matches(self, text):
+    def highlight_matches(self, field, text):
         spans = []
-        for highlighter in self.highlight_regexps:
+        for highlighter in self.highlight_regexps[field]:
             spans.extend(m.span() for m in highlighter.finditer(text))
 
         resolved_spans = set()
@@ -277,16 +284,18 @@ class SearchResults:
 
     def render_row(self, row):
         """Render a single row nice and compact."""
+        title = row[3]
         text = row[6]
 
-        text = self.highlight_matches(text)
+        title = self.highlight_matches("title", title)
+        text = self.highlight_matches("text", text)
 
         speaker_detail = None
         if row[5] or row[4]:
             speaker_detail = h("em")(row[5], ", ", row[4], ":")
 
         return h("div")(
-            h("h3")(h("a", href=row[0])(row[1], ", ", row[2], ", ", row[3])),
+            h("h3")(h("a", href=row[0])(row[1], ", ", row[2], ", ", title)),
             h("p")(h("span")(speaker_detail), " ", h("span")(text)),
         )
 
@@ -341,6 +350,18 @@ class UI:
             layout=wide_layout,
             style=style,
         )
+
+        self.search_fields = widgets.SelectMultiple(
+            value=("text",),
+            options=[
+                ("Text", "text"),
+                ("Procedural Titles", "title"),
+            ],
+            description="Search in:",
+            layout=wide_layout,
+            style=style,
+        )
+
         self.case_sensitive = widgets.Checkbox(
             value=False, description="Case sensitive"
         )
@@ -376,9 +397,9 @@ class UI:
         )
 
         self.start_year = widgets.BoundedIntText(
-            value=1996,
-            min=1996,
-            max=2026,
+            value=1998,
+            min=1998,
+            max=2027,
             step=1,
             description="Start year:",
             layout=wide_layout,
@@ -387,8 +408,8 @@ class UI:
 
         self.end_year = widgets.BoundedIntText(
             value=2026,
-            min=1996,
-            max=2026,
+            min=1998,
+            max=2027,
             step=1,
             description="End year:",
             layout=wide_layout,
@@ -450,12 +471,13 @@ class UI:
         # Assemble the search controller
         self.search_ui = widgets.VBox(
             [
-                widgets.HBox(
-                    [self.search_text, self.search_type],
-                    layout=wide_layout,
-                ),
-                widgets.HBox(
-                    [self.space_widget, self.case_sensitive],
+                widgets.VBox(
+                    [
+                        self.search_text,
+                        self.search_type,
+                        self.search_fields,
+                        self.case_sensitive,
+                    ],
                     layout=wide_layout,
                 ),
                 widgets.HBox([self.parties, self.houses], layout=wide_layout),
@@ -491,6 +513,7 @@ class UI:
                     self.search_text.value,
                     search_type=self.search_type.value,
                     case_sensitive=self.case_sensitive.value,
+                    search_fields=self.search_fields.value,
                 ),
             ),
             start_year=self.start_year.value,

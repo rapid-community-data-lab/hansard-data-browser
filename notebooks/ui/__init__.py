@@ -164,27 +164,21 @@ class SearchFilterSpec:
         for text_search in self.text_searches:
             search, options = text_search.get_search_regex()
 
-            conjunction_clauses = []
-            conjunction_params = []
-            disjunction_params = []
-
             for field in text_search.search_fields:
                 # Lists come from match all word queries so need an and
                 if isinstance(search, list):
+                    conjunction_clauses = []
                     for s in search:
                         conjunction_clauses.append(f"regexp_matches({field}, ?, ?)")
-                        conjunction_params.extend((s, options))
+                        params.extend((s, options))
+                    conjunction = " and\n".join(conjunction_clauses)
+                    text_search_clauses.append(f"({conjunction})")
                 else:
                     text_search_clauses.append(f"regexp_matches({field}, ?, ?)")
-                    disjunction_params.extend((search, options))
+                    params.extend((search, options))
 
-        if conjunction_clauses:
-            conjunction = " and\n".join(conjunction_clauses)
-            text_search_clauses.append(f"({conjunction})")
-
-        clauses.append(" or\n".join(text_search_clauses))
-        params.extend(disjunction_params)
-        params.extend(conjunction_params)
+        text_clause = " or\n".join(text_search_clauses)
+        clauses.append(f"({text_clause})")
 
         join = "\n".join(joins)
         where = " and\n".join(clauses)
@@ -334,6 +328,48 @@ class SearchResults:
         return h("div")(self.render_row(row) for row in self.rows.fetchall()).render()
 
 
+def create_text_search_components():
+    """The components for one instance of a search widget."""
+    wide_layout = widgets.Layout(width="98%")
+    style = {"description_width": "20%"}
+
+    search_text = widgets.Text(
+        value="",
+        placeholder="",
+        description="Search text:",
+        layout=wide_layout,
+        style=style,
+    )
+
+    search_type = widgets.Dropdown(
+        value="word-any",
+        options=[
+            ("Match any word", "word-any"),
+            ("Match all words", "word-all"),
+            ("Phrase", "phrase"),
+            ("Match regular expression", "regex"),
+        ],
+        description="Search type:",
+        layout=wide_layout,
+        style=style,
+    )
+
+    search_fields = widgets.SelectMultiple(
+        value=("text",),
+        options=[
+            ("Text", "text"),
+            ("Procedural Titles", "title"),
+        ],
+        description="Search in:",
+        layout=wide_layout,
+        style=style,
+    )
+
+    case_sensitive = widgets.Checkbox(value=False, description="Case sensitive")
+
+    return search_text, search_type, search_fields, case_sensitive
+
+
 class UI:
     def __init__(self) -> None:
         # Initialise db
@@ -360,41 +396,11 @@ class UI:
             style=style,
         )
 
-        self.search_text = widgets.Text(
-            value="",
-            placeholder="",
-            description="Search text:",
-            layout=wide_layout,
-            style=style,
-        )
+        self.text_search_components = []
 
-        self.search_type = widgets.Dropdown(
-            value="word-any",
-            options=[
-                ("Match any word", "word-any"),
-                ("Match all words", "word-all"),
-                ("Phrase", "phrase"),
-                ("Match regular expression", "regex"),
-            ],
-            description="Search type:",
-            layout=wide_layout,
-            style=style,
-        )
+        self.text_search_components.append(create_text_search_components())
 
-        self.search_fields = widgets.SelectMultiple(
-            value=("text",),
-            options=[
-                ("Text", "text"),
-                ("Procedural Titles", "title"),
-            ],
-            description="Search in:",
-            layout=wide_layout,
-            style=style,
-        )
-
-        self.case_sensitive = widgets.Checkbox(
-            value=False, description="Case sensitive"
-        )
+        self.display_text_search = widgets.Output(layout=wide_layout)
 
         party_options = ["All"]
         party_options.extend(
@@ -458,6 +464,13 @@ class UI:
             layout=wide_layout,
         )
 
+        # Create a new text search component
+        self.new_text_search_button = widgets.Button(
+            description="Add new text search component",
+            layout=wide_layout,
+        )
+        self.new_text_search_button.on_click(self.add_new_text_search)
+
         # Run from the search tab.
         self.run_button = widgets.Button(
             description="Search",
@@ -501,15 +514,7 @@ class UI:
         # Assemble the search controller
         self.search_ui = widgets.VBox(
             [
-                widgets.VBox(
-                    [
-                        self.search_text,
-                        self.search_type,
-                        self.search_fields,
-                        self.case_sensitive,
-                    ],
-                    layout=wide_layout,
-                ),
+                self.display_text_search,
                 widgets.HBox([self.parties, self.houses], layout=wide_layout),
                 widgets.HBox([self.start_year, self.end_year], layout=wide_layout),
                 self.run_button,
@@ -531,21 +536,65 @@ class UI:
         )
 
         # Container for the final output
-
         display(self.ui)
+
+        self.render_text_search()
+
+    def add_new_text_search(self, button) -> None:
+        new_component = create_text_search_components()
+        self.text_search_components.append(new_component)
+
+        self.render_text_search()
+
+    def delete_text_search(self, button) -> None:
+        del self.text_search_components[button.index]
+
+        self.render_text_search()
+
+    def new_text_delete_button(self, delete_index) -> None:
+        button = widgets.Button(description="Delete")
+        button.index = delete_index
+
+        button.on_click(self.delete_text_search)
+        return button
+
+    def render_text_search(self) -> None:
+        all_components = []
+
+        add_delete = len(self.text_search_components) > 1
+
+        for i, component in enumerate(self.text_search_components):
+            all_components.extend(component)
+            if add_delete:
+                all_components.append(self.new_text_delete_button(i))
+            all_components.append(widgets.HTML(value="<hr>")),
+
+        all_components.append(self.new_text_search_button)
+
+        self.display_text_search.clear_output()
+
+        with self.display_text_search:
+            w = widgets.VBox(all_components)
+            display(w)
 
     def get_search_filters(self) -> SearchFilterSpec:
         """Get the current state of the search filters."""
 
         return SearchFilterSpec(
-            text_searches=(
+            text_searches=[
                 TextSearchSpec(
-                    self.search_text.value,
-                    search_type=self.search_type.value,
-                    case_sensitive=self.case_sensitive.value,
-                    search_fields=self.search_fields.value,
-                ),
-            ),
+                    search_text.value,
+                    search_type=search_type.value,
+                    search_fields=search_fields.value,
+                    case_sensitive=case_sensitive.value,
+                )
+                for (
+                    search_text,
+                    search_type,
+                    search_fields,
+                    case_sensitive,
+                ) in self.text_search_components
+            ],
             start_year=self.start_year.value,
             end_year=self.end_year.value,
             parties=self.parties.value,

@@ -50,16 +50,21 @@ class TextSearchSpec:
         """Get the regular expression to be used as the text search."""
         options = "c" if self.case_sensitive else "i"
 
+        text = self.text
+        if self.search_type != "regex":
+            # Wildcard operator
+            text = text.replace("*", r"\S*?")
+
         if self.search_type == "word-any":
-            search = "|".join(rf"\b{t}\b" for t in self.text.split())
+            search = "|".join(rf"\b{t}\b" for t in text.split())
 
         elif self.search_type == "word-all":
-            search = [rf"\b{t}\b" for t in self.text.split()]
+            search = [rf"\b{t}\b" for t in text.split()]
 
         elif self.search_type == "phrase":
             # A phrase is words in order, separated by any kind of run of ASCII
             # whitespace.
-            search = r"\s+".join(rf"\b{t}\b" for t in self.text.split())
+            search = r"\s+".join(rf"\b{t}\b" for t in text.split())
 
         elif self.search_type == "regex":
             search = self.text
@@ -78,17 +83,23 @@ class TextSearchSpec:
         """
         options = re.NOFLAG if self.case_sensitive else re.IGNORECASE
 
+        text = self.text
+
+        if self.search_type != "regex":
+            # Wildcard operator
+            text = text.replace("*", r"\S*?")
+
         # Highlighting should cover all words, even with searching for word-all (And)
         if self.search_type in ("word-any", "word-all"):
-            search = "|".join(rf"\b{t}\b" for t in self.text.split())
+            search = "|".join(rf"\b{t}\b" for t in text.split())
 
         elif self.search_type == "phrase":
             # A phrase is words in order, separated by any kind of run of ASCII
             # whitespace.
-            search = r"\s+".join(rf"\b{t}\b" for t in self.text.split())
+            search = r"\s+".join(rf"\b{t}\b" for t in text.split())
 
         else:
-            search = self.text
+            search = text
 
         return re.compile(search, flags=options)
 

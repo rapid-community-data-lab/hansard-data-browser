@@ -57,6 +57,8 @@ interface = UI()
 #
 # The text you're looking for. How this is interpreted depends on the which search type you've selected and which fields to search in.
 #
+# The wildcard operator * can be used in with any search type except _regex_, and can be used for partial matching. For example cat* will match cat, cats, category, catch and more.
+#
 # ## Search Type
 #
 # You can search in the following ways:

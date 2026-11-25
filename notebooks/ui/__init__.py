@@ -29,6 +29,7 @@ import dataclasses as dc
 import datetime as dt
 import re
 import time
+import traceback
 
 from IPython.display import HTML
 from openpyxl import Workbook, styles
@@ -41,7 +42,7 @@ import ipywidgets as widgets
 @dc.dataclass
 class TextSearchSpec:
     text: str = ""
-    search_type: Literal["word-any", "word-all", "regex"] = "word-any"
+    search_type: Literal["word-any", "word-all", "phrase", "regex"] = "word-any"
     case_sensitive: bool = False
     search_fields: tuple[Literal["text", "title"]] = ("text",)
 
@@ -55,7 +56,10 @@ class TextSearchSpec:
         elif self.search_type == "word-all":
             search = [rf"\b{t}\b" for t in self.text.split()]
 
-        # todo: add phrase search here specifically
+        elif self.search_type == "phrase":
+            # A phrase is words in order, separated by any kind of run of ASCII
+            # whitespace.
+            search = r"\s+".join(rf"\b{t}\b" for t in self.text.split())
 
         elif self.search_type == "regex":
             search = self.text
@@ -77,6 +81,12 @@ class TextSearchSpec:
         # Highlighting should cover all words, even with searching for word-all (And)
         if self.search_type in ("word-any", "word-all"):
             search = "|".join(rf"\b{t}\b" for t in self.text.split())
+
+        elif self.search_type == "phrase":
+            # A phrase is words in order, separated by any kind of run of ASCII
+            # whitespace.
+            search = r"\s+".join(rf"\b{t}\b" for t in self.text.split())
+
         else:
             search = self.text
 
@@ -149,17 +159,32 @@ class SearchFilterSpec:
         )
         params.extend((self.start_year, self.end_year))
 
+        text_search_clauses = []
+
         for text_search in self.text_searches:
             search, options = text_search.get_search_regex()
 
+            conjunction_clauses = []
+            conjunction_params = []
+            disjunction_params = []
+
             for field in text_search.search_fields:
+                # Lists come from match all word queries so need an and
                 if isinstance(search, list):
                     for s in search:
-                        clauses.append(f"regexp_matches({field}, ?, ?)")
-                        params.extend((s, options))
+                        conjunction_clauses.append(f"regexp_matches({field}, ?, ?)")
+                        conjunction_params.extend((s, options))
                 else:
-                    clauses.append(f"regexp_matches({field}, ?, ?)")
-                    params.extend((search, options))
+                    text_search_clauses.append(f"regexp_matches({field}, ?, ?)")
+                    disjunction_params.extend((search, options))
+
+        if conjunction_clauses:
+            conjunction = " and\n".join(conjunction_clauses)
+            text_search_clauses.append(f"({conjunction})")
+
+        clauses.append(" or\n".join(text_search_clauses))
+        params.extend(disjunction_params)
+        params.extend(conjunction_params)
 
         join = "\n".join(joins)
         where = " and\n".join(clauses)
@@ -195,11 +220,15 @@ class SearchFilterSpec:
             for v, k in (
                 ("Match any word", "word-any"),
                 ("Match all words", "word-all"),
+                ("Phrase", "phrase"),
                 ("Match regex", "regex"),
             )
         }
+
+        # TODO: extend to include multiple text search clauses.
         for text_search in self.text_searches:
-            key_values.append(("Search", text_search.text))
+            key_values.append(("Search Text", text_search.text))
+            key_values.append(("Search In", ", ".join(text_search.search_fields)))
             key_values.append(
                 ("Search Type", search_descriptions[text_search.search_type])
             )
@@ -344,6 +373,7 @@ class UI:
             options=[
                 ("Match any word", "word-any"),
                 ("Match all words", "word-all"),
+                ("Phrase", "phrase"),
                 ("Match regular expression", "regex"),
             ],
             description="Search type:",
@@ -650,7 +680,7 @@ class UI:
 
         except Exception as e:
             with self.display_transcripts:
-                display(e)
+                print(traceback.format_exc(e))
                 print(
                     "Whoops, something went wrong - try again with different parameters"
                 )
@@ -660,9 +690,7 @@ class UI:
 
         self.display_transcripts.clear_output()
 
-        # TODO: progress bar
         # TODO: check the output size and make sure it fits in excel limits
-        # TODO: provenance sheet indicating the query.
 
         with self.display_transcripts:
             try:
@@ -670,11 +698,7 @@ class UI:
                 display(h("h2")("Search Overview"))
                 display(filters)
 
-                regex_params = filters.get_search_regex()
-
-                # Glue the match all words back into a regex to extract all instances.
-                if isinstance(regex_params[0], list):
-                    regex_params = ("|".join(regex_params[0]), regex_params[1])
+                highlighters = filters.highlight_regexps()
 
                 # Calculate the total rows for the export progress
                 total_rows = self.conn.execute(
@@ -717,16 +741,6 @@ class UI:
                         speaker_detail.family_name || ', ' || speaker_detail.given_name,
                         speaker_detail.gender,
                         speaker_detail.party,
-                        list_aggregate(
-                            regexp_extract_all(
-                                paragraph.text,
-                                ?,
-                                0,
-                                ?
-                            ),
-                            'string_agg',
-                            ', '
-                        ) as matches,
                         paragraph.text
                     from 'data/paragraph.parquet'
                     inner join matching_units using(session_id, procedural_unit_number)
@@ -736,8 +750,7 @@ class UI:
                     -- left join because the speaker_id can be null or not mapped to anything.
                     left outer join 'data/speaker_detail.parquet' using(speaker_detail_id)
                     order by session.date, session.chamber, para_id
-                    """,
-                    regex_params,
+                    """
                 )
 
                 workbook = Workbook()
@@ -774,12 +787,21 @@ class UI:
                 worksheet = workbook["search_log"]
 
                 log_header = [f.name for f in dc.fields(SearchFilterSpec)]
+                log_header[2:3] = [f.name for f in dc.fields(TextSearchSpec)]
                 worksheet.append(["session_search_number", *log_header])
 
                 for i, f in enumerate(self.search_history):
+                    # as tuple also tupleises nested dataclasses!
                     row = list(dc.astuple(f))
-                    row[5] = ", ".join(row[5])
-                    row[6] = ", ".join(row[6])
+
+                    row[4] = ",".join(row[4])
+                    row[5] = ",".join(row[5])
+
+                    # Handle the search specific components
+                    # TODO: extend to multiple search clauses
+                    text_search = list(row[2][0])
+                    text_search[3] = ",".join(text_search[3])
+                    row[2:3] = text_search
 
                     worksheet.append([i + 1, *row])
 
@@ -797,8 +819,9 @@ class UI:
                     "speaker_name",
                     "speaker_gender",
                     "speaker_party",
-                    "text_matches",
                     "text",
+                    "text_matches",
+                    "title_matches",
                 ]
 
                 worksheet.append(header)
@@ -806,7 +829,18 @@ class UI:
                 last_update = time.monotonic()
                 written_rows = 0
                 while row := content_query.fetchone():
-                    worksheet.append(row)
+                    text_matches = set()
+                    for highlighter in highlighters["text"]:
+                        text_matches |= set(highlighter.findall(row[-1]))
+
+                    text_matches = " ".join(sorted(text_matches))
+
+                    title_matches = set()
+                    for highlighter in highlighters["title"]:
+                        title_matches |= set(highlighter.findall(row[3]))
+                    title_matches = " ".join(sorted(title_matches))
+
+                    worksheet.append([*row, text_matches, title_matches])
                     written_rows += 1
 
                     if time.monotonic() - last_update > 0.2:
@@ -894,5 +928,5 @@ class UI:
                 )
 
             except Exception as e:
-                display(e)
+                print(traceback.format_exc(e))
                 print("something went wrong")

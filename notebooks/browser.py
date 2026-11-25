@@ -55,11 +55,24 @@ interface = UI()
 #
 # ## Search Text
 #
-# The text search is a regular expression search over the text of the proceedings. The interpretation of the search text is controlled by the `Search for whole words` checkbox and the `Case sensitive` checkbox.
+# The text you're looking for. How this is interpreted depends on the which search type you've selected and which fields to search in.
 #
-# If `Search for whole words` is checked (default), then the search string is broken up into individual words using whitespace, and only exact matching words are checked. For example if the search is `apple pear banana`, speeches containing `apple`, `pear`, or `banana` will match, but not variations like `apples` and `bananas`.
+# ## Search Type
 #
-# If `Search for whole words` is turned off, the search text is treated as a regular expression using the [RE2 syntax](https://github.com/google/re2/wiki/Syntax). When not searching for whole words a query like `AI` will match both the word-unit `AI`, but also text inside words like `paint`. This can be used to create precise queries for certain forms, for example the syntax `.?` in `job.?ready graduates` will optionally match any character between `job` and `ready`. This will match `job-ready graduates`, `jobready graduates`, and `job ready graduates`.
+# You can search in the following ways:
+#
+# - *match any words*: A boolean OR query: the search text is broken up into words using whitespace characters, and parts of the record that include any of the words are matched.
+# - *match all words*: A boolean AND query: the search text is broken up into words using whitespace characters, and records are only matched if *all* of the words are present.
+# - *phrase*: Like match all words, but further constrains so matches only happen if the words are in the same order, allowing you to search for an exact phrase.
+# - *regex*: A full regular expression search: when you want to match very specific patterns of text. Examples include: matching specific parts of words, or looking for specific combinations of punctuation.
+#
+# ## Search Fields
+#
+# You can choose to search in either or both the text of proceedings (typically what is spoken, but may also include procedural details, or written materials like reports included in the Hansard), or the procedural titles. The titles are based on the business of the day and are created according to particular rules. 
+#
+# Title searches can quickly narrow down the proceedings to materials that are formally related to the topic. 
+#
+# ## Case Sensitivity
 #
 # If `Case sensitive` is not checked (default), matches will be made regardless of the case of the text. A search for `Banana` will match `banana`, `BANANA`, and `Banana`.
 #
@@ -101,7 +114,8 @@ interface = UI()
 # - *speaker_name*: The name of the speaker.
 # - *speaker_gender*: The gender of the speaker.
 # - *speaker_party*: The party of the speaker (at the time of the speech).
-# - *text_matches*: If search text was provided, the text that matched in that paragraph will be included here. This may be empty.
 # - *text*: The text included in the proceedings (typically transcribed text, but may also indicate procedural or written text).
+# - *text_matches*: If search text was provided, the text that matched in that paragraph will be included here. This may be empty.
+# - *title_matches*: If search text was provided, the text that matched in that debate title will be included here. This may be empty.
 
 # %%
